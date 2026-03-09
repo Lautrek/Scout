@@ -1,0 +1,20 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/home/riga/Projects/Lautrek/projects/scout/logs/.ec7a2d873bf95ffe340793845f1b6c855005664c-audit.json",
+    "files": [
+        {
+            "date": 1769956622988,
+            "name": "/home/riga/Projects/Lautrek/projects/scout/logs/mcp-puppeteer-2026-02-01.log",
+            "hash": "423d16c002d3238bec94d2bb1836a505477d62dac62e0cc82b283e4693e95e20"
+        },
+        {
+            "date": 1770035618516,
+            "name": "/home/riga/Projects/Lautrek/projects/scout/logs/mcp-puppeteer-2026-02-02.log",
+            "hash": "a897a80d933325177fcacddcd57d01642ed124fe216375abb135238ac7161fe1"
+        }
+    ],
+    "hashType": "sha256"
+}
