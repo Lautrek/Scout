@@ -1,3 +1,4 @@
+import { INJECT_SCOUT_IDS_SCRIPT } from "./a11y.js";
 import crypto from "crypto";
 export async function captureState(page) {
     const [url, title, elementCount, bodyContent] = await Promise.all([
@@ -16,6 +17,10 @@ export async function healerWrap(page, action) {
     await page.waitForTimeout(500);
     const after = await captureState(page);
     const stateChange = detectChange(before, after);
+    // After DOM mutations, re-inject scout IDs so next tool call has fresh targets
+    if (stateChange === "dom_change" || stateChange === "modal") {
+        await page.evaluate(INJECT_SCOUT_IDS_SCRIPT).catch(() => { });
+    }
     return { stateChange, before, after };
 }
 function detectChange(before, after) {

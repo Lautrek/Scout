@@ -4,6 +4,9 @@
  *
  * This is the human-in-the-loop escape hatch: verification prompts, CAPTCHAs,
  * MFA codes, consent dialogs — anything the agent can't automate.
+ *
+ * Survives page navigations by re-injecting the banner on framenavigated events
+ * and polling localStorage as a fallback (persists across soft navigations).
  */
 export declare function handoffTool(instruction: string, timeoutMs?: number): Promise<{
     completed: boolean;

@@ -16,6 +16,7 @@ import { hoverTool } from "./tools/hover.js";
 import { pressKeyTool } from "./tools/press_key.js";
 import { dragTool } from "./tools/drag.js";
 import { saveSession, loadSession, listSessions } from "./tools/session.js";
+import { loginTool } from "./tools/login.js";
 import { tabsTool, switchTabTool, newTabTool } from "./tools/tabs.js";
 import { engine } from "./browser/engine.js";
 const server = new McpServer({
@@ -193,6 +194,17 @@ server.tool("scout_load_session", "Load a saved browser session. This will resta
 server.tool("scout_list_sessions", "List all saved browser sessions.", {}, async () => {
     const sessions = await listSessions();
     return { content: [{ type: "text", text: JSON.stringify(sessions, null, 2) }] };
+});
+// High-level platform login
+server.tool("scout_login", "Log in to a social platform automatically using React-safe keyboard input. Handles multi-step flows and unusual activity challenges. Saves a session via scout_save_session after success.", {
+    platform: z.enum(["twitter", "linkedin", "instagram", "facebook"]).describe("Platform to log in to"),
+    username: z.string().describe("Username or email address"),
+    password: z.string().describe("Password"),
+}, async ({ platform, username, password }) => {
+    const result = await loginTool(platform, username, password);
+    return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
 });
 // Console logs
 server.tool("scout_console_logs", "Get the last 100 browser console logs and errors.", {

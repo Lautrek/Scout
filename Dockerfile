@@ -1,26 +1,27 @@
-FROM python:3.12-slim
+FROM node:20-slim
+
+# Install system Chromium and dependencies
+RUN apt-get update && apt-get install -y \
+    chromium \
+    chromium-sandbox \
+    fonts-noto-color-emoji \
+    --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+# Copy package files
+COPY package.json ./
 
-# Install Python dependencies
-COPY pyproject.toml uv.lock ./
-RUN pip install uv && uv sync --all-extras
+# Install dependencies
+RUN npm install
 
-# Copy application code
-COPY . .
+# Copy source
+COPY tsconfig.json ./
+COPY src/ ./src/
 
-# Create data directory
-RUN mkdir -p /data
+# Use system Chromium
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+ENV SCOUT_HEADLESS=true
 
-# Expose port
-EXPOSE 9002
-
-# Run the application
-CMD ["uv", "run", "python", "-m", "scout.cli", "serve", "--host", "0.0.0.0", "--port", "9002"]
+CMD ["npx", "tsx", "src/index.ts"]

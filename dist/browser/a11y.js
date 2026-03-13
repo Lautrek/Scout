@@ -1,4 +1,39 @@
 const MAX_ELEMENTS = parseInt(process.env.SCOUT_MAX_ELEMENTS ?? "1000");
+/**
+ * Standalone script that injects data-scout-id attributes into the DOM.
+ * Can be run via page.evaluate() after DOM mutations to keep IDs fresh.
+ * Exported for use by healer.ts.
+ */
+export const INJECT_SCOUT_IDS_SCRIPT = `(() => {
+  const SELECTORS = [
+    "a[href]", "button", 'input:not([type="hidden"])', "select", "textarea",
+    '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
+    '[role="combobox"]', '[role="listbox"]', '[role="option"]', '[role="menuitem"]',
+    '[role="tab"]', '[role="switch"]', '[role="slider"]', '[role="searchbox"]',
+    '[role="spinbutton"]', "h1, h2, h3, h4, h5, h6"
+  ].join(", ");
+
+  // Find the highest existing ID so we continue from there
+  let maxId = 0;
+  document.querySelectorAll("[data-scout-id]").forEach(el => {
+    const id = parseInt(el.getAttribute("data-scout-id") || "0");
+    if (id > maxId) maxId = id;
+  });
+
+  // Only inject IDs into elements that don't already have one
+  const seen = new Set(Array.from(document.querySelectorAll("[data-scout-id]")));
+  let counter = maxId + 1;
+  document.querySelectorAll(SELECTORS).forEach(el => {
+    if (seen.has(el)) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || parseFloat(style.opacity) === 0) return;
+    el.setAttribute("data-scout-id", String(counter++));
+    seen.add(el);
+  });
+  return counter - 1;
+})()`;
 let _lastElements = [];
 export function getElement(id) {
     return _lastElements.find((e) => e.id === id);
