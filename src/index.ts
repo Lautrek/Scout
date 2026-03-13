@@ -10,7 +10,7 @@ import { typeTool } from "./tools/type.js";
 import { scrollTool } from "./tools/scroll.js";
 import { selectTool } from "./tools/select.js";
 import { waitTool } from "./tools/wait.js";
-import { handoffTool } from "./tools/handoff.js";
+import { handoffTool, checkHandoff, cancelHandoff } from "./tools/handoff.js";
 import { backTool, forwardTool, reloadTool } from "./tools/nav_extra.js";
 import { hoverTool } from "./tools/hover.js";
 import { pressKeyTool } from "./tools/press_key.js";
@@ -353,7 +353,7 @@ server.tool(
 // Human-in-the-loop handoff
 server.tool(
   "scout_handoff",
-  "Show a banner in the live browser asking the user to take a manual action (e.g. solve a CAPTCHA, complete MFA, handle a verification prompt). Blocks until the user clicks Done or the timeout elapses.",
+  "Inject a banner in the live browser asking the user to take a manual action. Returns IMMEDIATELY with a handoff_id — does NOT block. Poll scout_handoff_check(handoff_id) every 5-10 seconds until status is 'completed'. Use for: CAPTCHAs, SMS codes, authenticator app prompts, email verification.",
   {
     instruction: z.string().describe("Plain-language instruction shown to the user in the browser"),
     timeout: z.number().int().positive().optional().describe("Max wait in ms (default: 300000 = 5 min)"),
@@ -365,6 +365,35 @@ server.tool(
         type: "text",
         text: JSON.stringify(result, null, 2),
       }],
+    };
+  }
+);
+
+// Poll handoff status (non-blocking)
+server.tool(
+  "scout_handoff_check",
+  "Check whether a pending handoff has been completed by the human. Returns immediately. Call this every 5-10 seconds after scout_handoff until status is 'completed' or 'expired'.",
+  {
+    handoff_id: z.string().describe("The handoff_id returned by scout_handoff"),
+  },
+  async ({ handoff_id }) => {
+    const result = checkHandoff(handoff_id);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "scout_handoff_cancel",
+  "Cancel a pending handoff and remove the banner from the browser.",
+  {
+    handoff_id: z.string().describe("The handoff_id returned by scout_handoff"),
+  },
+  async ({ handoff_id }) => {
+    const result = await cancelHandoff(handoff_id);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
   }
 );

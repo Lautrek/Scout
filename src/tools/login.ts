@@ -14,19 +14,32 @@ export interface LoginResult {
   success: boolean;
   url: string;
   challenge_type?: string;
+  handoff_id?: string;
   error?: string;
 }
 
 /**
- * High-level login tool. Navigates to the platform login page and drives
- * the login flow automatically using React-safe keyboard input.
+ * High-level login tool. Drives the full login flow automatically.
  *
- * Handles:
+ * Handles automatically:
  * - Standard username/password two-step flows (Twitter/X style)
- * - "Unusual login activity" username confirmation challenges
- * - Unknown challenges: injects a handoff banner for human intervention
+ * - "Unusual login activity" username confirmation (enter your username/phone/email again)
+ * - "Confirm your identity" screens with a fillable input
  *
- * Supported platforms: twitter, linkedin, instagram, facebook
+ * Returns handoff_id (non-blocking) for challenges requiring human:
+ * - CAPTCHA images
+ * - SMS code sent to phone
+ * - Authenticator app TOTP
+ * - Email verification code
+ *
+ * When handoff_id is returned: poll scout_handoff_check(handoff_id) until
+ * status is "completed", then call scout_login again or verify with scout_snapshot.
+ *
+ * Credential formats:
+ *   twitter  → username (not email)
+ *   linkedin → email
+ *   instagram → email
+ *   facebook → email
  */
 export async function loginTool(
   platform: string,
@@ -48,19 +61,19 @@ export async function loginTool(
     await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.waitForTimeout(2000);
 
-    for (let step = 0; step < 5; step++) {
+    for (let step = 0; step < 8; step++) {
       const currentUrl = page.url();
 
-      // Success detection — platform-specific home page indicators
+      // Success detection
       if (isLoggedIn(platform, currentUrl)) {
-        // Auto-save the session so EchoBench can pick it up
         await saveSession(platform).catch(() => {});
         return { success: true, url: currentUrl };
       }
 
       const elements = await extractA11yElements(page);
+      const pageText = await page.evaluate(() => document.body.innerText.toLowerCase());
 
-      // Detect which step we're on by looking for known input types
+      // --- Detect input fields ---
       const passwordInput = elements.find(
         (e) =>
           e.role === "textbox" &&
@@ -79,6 +92,10 @@ export async function loginTool(
             e.placeholder?.toLowerCase().includes("username"))
       );
 
+      const anyTextInput = elements.find(
+        (e) => e.role === "textbox" && e.enabled
+      );
+
       const nextButton = elements.find(
         (e) =>
           e.role === "button" &&
@@ -86,79 +103,119 @@ export async function loginTool(
             e.label?.toLowerCase() === "continue" ||
             e.label?.toLowerCase() === "log in" ||
             e.label?.toLowerCase() === "sign in" ||
-            e.label?.toLowerCase() === "login")
+            e.label?.toLowerCase() === "login" ||
+            e.label?.toLowerCase() === "verify")
       );
 
+      // --- Password step ---
       if (passwordInput) {
-        // Password step
         await focusAndType(page, passwordInput.id, password, true);
         await page.waitForTimeout(500);
-        if (nextButton) {
-          await clickById(page, nextButton.id);
-        } else {
-          await page.keyboard.press("Enter");
-        }
+        if (nextButton) await clickById(page, nextButton.id);
+        else await page.keyboard.press("Enter");
         await page.waitForTimeout(3000);
         continue;
       }
 
+      // --- Username/email step (initial or unusual-activity confirmation) ---
       if (usernameInput) {
-        // Username/email step (first step or unusual activity challenge)
         await focusAndType(page, usernameInput.id, username, true);
         await page.waitForTimeout(500);
-        if (nextButton) {
-          await clickById(page, nextButton.id);
-        } else {
-          await page.keyboard.press("Enter");
-        }
+        if (nextButton) await clickById(page, nextButton.id);
+        else await page.keyboard.press("Enter");
         await page.waitForTimeout(3000);
         continue;
       }
 
-      // No recognized input — check if there's a challenge we can't handle
-      const pageText = await page.evaluate(() => document.body.innerText.toLowerCase());
-      if (
+      // --- Automatable challenges: generic "confirm your identity" input ---
+      // Twitter sometimes shows a plain input with no label/placeholder when asking
+      // to re-enter username during an unusual activity check.
+      const isConfirmPage =
+        pageText.includes("unusual") ||
+        pageText.includes("confirm your identity") ||
+        pageText.includes("verify your identity") ||
+        pageText.includes("enter your") ||
+        pageText.includes("help us confirm");
+
+      if (isConfirmPage && anyTextInput) {
+        // Fill with username (the most common ask on this page type)
+        await focusAndType(page, anyTextInput.id, username, true);
+        await page.waitForTimeout(500);
+        if (nextButton) await clickById(page, nextButton.id);
+        else await page.keyboard.press("Enter");
+        await page.waitForTimeout(3000);
+        continue;
+      }
+
+      // --- Detect code-input challenges (6-digit boxes, OTP fields) ---
+      const codeInput = elements.find(
+        (e) =>
+          e.role === "textbox" &&
+          (e.placeholder?.match(/\d{6}/) ||
+            e.label?.toLowerCase().includes("code") ||
+            e.label?.toLowerCase().includes("otp") ||
+            e.placeholder?.toLowerCase().includes("code"))
+      );
+
+      if (codeInput) {
+        // Determine what kind of code it is
+        const isSms = pageText.includes("text") || pageText.includes("phone") || pageText.includes("sms");
+        const isAuthApp = pageText.includes("authenticator") || pageText.includes("totp");
+        const isEmail = pageText.includes("email") && !isSms;
+
+        let challengeType = "verification_code";
+        let hint = "Enter the verification code";
+        if (isSms) { challengeType = "sms_code"; hint = "Enter the SMS code sent to your phone"; }
+        else if (isAuthApp) { challengeType = "totp"; hint = "Enter the code from your authenticator app"; }
+        else if (isEmail) { challengeType = "email_code"; hint = "Enter the code sent to your email"; }
+
+        const { handoff_id } = await handoffTool(
+          `${hint}, then click Done.`,
+          120_000
+        );
+        return { success: false, url: currentUrl, challenge_type: challengeType, handoff_id };
+      }
+
+      // --- CAPTCHA ---
+      const hasCaptcha =
+        pageText.includes("captcha") ||
+        pageText.includes("i'm not a robot") ||
+        elements.some((e) => e.label?.toLowerCase().includes("captcha"));
+
+      if (hasCaptcha) {
+        const { handoff_id } = await handoffTool(
+          "Please solve the CAPTCHA, then click Done.",
+          180_000
+        );
+        return { success: false, url: currentUrl, challenge_type: "captcha", handoff_id };
+      }
+
+      // --- Unknown challenge with no fillable input ---
+      const hasAnyChallengeCue =
         pageText.includes("verify") ||
         pageText.includes("confirm") ||
         pageText.includes("unusual") ||
-        pageText.includes("captcha") ||
-        pageText.includes("challenge")
-      ) {
-        // Unknown challenge — hand off to human
-        const handoffResult = await handoffTool(
+        pageText.includes("challenge") ||
+        pageText.includes("security");
+
+      if (hasAnyChallengeCue && !anyTextInput) {
+        const { handoff_id } = await handoffTool(
           `Login challenge on ${platform}. Please complete the verification and click Done when logged in.`,
-          120_000 // 2 min timeout
+          120_000
         );
-        if (handoffResult.completed) {
-          const finalUrl = page.url();
-          const success = isLoggedIn(platform, finalUrl);
-          if (success) await saveSession(platform).catch(() => {});
-          return {
-            success,
-            url: finalUrl,
-            challenge_type: "human_verified",
-          };
-        } else {
-          return {
-            success: false,
-            url: page.url(),
-            challenge_type: "timeout",
-            error: "Handoff timed out waiting for human to complete challenge",
-          };
-        }
+        return { success: false, url: currentUrl, challenge_type: "unknown_challenge", handoff_id };
       }
 
-      // Nothing recognizable — wait a moment and try again
+      // Nothing recognizable — wait and retry
       await page.waitForTimeout(2000);
     }
 
     const finalUrl = page.url();
+    const success = isLoggedIn(platform, finalUrl);
     return {
-      success: isLoggedIn(platform, finalUrl),
+      success,
       url: finalUrl,
-      error: isLoggedIn(platform, finalUrl)
-        ? undefined
-        : "Max steps reached without detecting successful login",
+      error: success ? undefined : "Max steps reached without detecting successful login",
     };
   } catch (err) {
     return {
