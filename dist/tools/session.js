@@ -41,24 +41,23 @@ export async function loadSession(name) {
     }
     await engine.restartContext(filePath);
 }
-/** List all saved sessions with metadata if available. */
+/** List all saved sessions with metadata if available. Always returns uniform objects. */
 export async function listSessions() {
     try {
         const files = await fs.readdir(SESSIONS_DIR);
         const sessions = files
             .filter((f) => f.endsWith(".json") && !f.endsWith(".meta.json"))
             .map((f) => f.replace(".json", ""));
-        const results = await Promise.all(sessions.map(async (name) => {
+        return await Promise.all(sessions.map(async (name) => {
             const metaPath = path.join(SESSIONS_DIR, `${name}.meta.json`);
             try {
                 const meta = JSON.parse(await fs.readFile(metaPath, "utf-8"));
                 return { name, meta };
             }
             catch {
-                return name;
+                return { name, meta: null };
             }
         }));
-        return results;
     }
     catch {
         return [];

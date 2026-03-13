@@ -111,7 +111,7 @@ server.tool(
 // Click element by ID
 server.tool(
   "scout_click",
-  "Click an element by its snapshot ID. Returns healer result describing what changed.",
+  "Click an element by its snapshot ID. Returns healer result describing what changed. If stateChange is 'navigation', element IDs are now stale — call scout_snapshot before using any IDs again.",
   {
     id: z.number().int().positive().describe("Element ID from the last snapshot"),
   },
@@ -126,7 +126,7 @@ server.tool(
 // Type text into element
 server.tool(
   "scout_type",
-  "Type text into an input element by its snapshot ID.",
+  "Type text into an input element by its snapshot ID. Uses React-safe keyboard events. If stateChange is 'navigation', call scout_snapshot before using any IDs again.",
   {
     id: z.number().int().positive().describe("Element ID from the last snapshot"),
     text: z.string().describe("Text to type"),
@@ -322,10 +322,10 @@ server.tool(
 // High-level platform login
 server.tool(
   "scout_login",
-  "Log in to a social platform automatically using React-safe keyboard input. Handles multi-step flows and unusual activity challenges. Saves a session via scout_save_session after success.",
+  "Log in to a social platform automatically. Handles multi-step flows and unusual activity challenges. Auto-saves the session on success (no need to call scout_save_session). Twitter accepts username; LinkedIn/Instagram/Facebook expect email. Returns {success, url, challenge_type?, error?} — always check success before proceeding.",
   {
     platform: z.enum(["twitter", "linkedin", "instagram", "facebook"]).describe("Platform to log in to"),
-    username: z.string().describe("Username or email address"),
+    username: z.string().describe("Username (twitter) or email (linkedin, instagram, facebook)"),
     password: z.string().describe("Password"),
   },
   async ({ platform, username, password }) => {

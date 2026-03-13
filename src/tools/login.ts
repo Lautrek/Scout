@@ -1,6 +1,7 @@
 import { engine } from "../browser/engine.js";
 import { extractA11yElements } from "../browser/a11y.js";
 import { handoffTool } from "./handoff.js";
+import { saveSession } from "./session.js";
 
 const PLATFORM_LOGIN_URLS: Record<string, string> = {
   twitter: "https://x.com/login",
@@ -52,6 +53,8 @@ export async function loginTool(
 
       // Success detection — platform-specific home page indicators
       if (isLoggedIn(platform, currentUrl)) {
+        // Auto-save the session so EchoBench can pick it up
+        await saveSession(platform).catch(() => {});
         return { success: true, url: currentUrl };
       }
 
@@ -128,8 +131,10 @@ export async function loginTool(
         );
         if (handoffResult.completed) {
           const finalUrl = page.url();
+          const success = isLoggedIn(platform, finalUrl);
+          if (success) await saveSession(platform).catch(() => {});
           return {
-            success: isLoggedIn(platform, finalUrl),
+            success,
             url: finalUrl,
             challenge_type: "human_verified",
           };
