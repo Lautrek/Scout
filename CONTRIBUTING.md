@@ -17,7 +17,8 @@ src/
 ├── index.ts              # MCP tool registration + startup
 ├── lcp.ts                # Optional HTTP dispatch server
 ├── browser/
-│   ├── engine.ts         # Browser lifecycle, CDP persistence
+│   ├── engine.ts         # Browser lifecycle, CDP connect/launch modes
+│   ├── discovery.ts      # Scan for running browsers with debug ports
 │   ├── a11y.ts           # Accessibility tree extraction
 │   ├── som.ts            # Set-of-Marks badge overlay
 │   └── healer.ts         # Before/after state detection

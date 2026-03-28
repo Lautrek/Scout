@@ -18,6 +18,23 @@ app.use(cors());
 app.use(express.json());
 
 const startTime = Date.now();
+const LCP_SECRET = process.env.SCOUT_LCP_SECRET ?? "";
+
+// Authentication middleware — if SCOUT_LCP_SECRET is set, require it on all POST routes
+function requireSecret(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (!LCP_SECRET) return next(); // no secret configured — local-only use
+  const auth = req.headers["x-scout-secret"] as string
+    ?? (req.headers.authorization?.replace("Bearer ", "") || "");
+  if (auth !== LCP_SECRET) {
+    res.status(401).json({ error: "Unauthorized — set X-Scout-Secret header" });
+    return;
+  }
+  next();
+}
+
+// Apply auth to all mutation endpoints
+app.use("/lcp/dispatch", requireSecret);
+app.use("/lcp/forge", requireSecret);
 
 // 1. State Inspection
 app.get("/lcp/health", (req, res) => {
@@ -76,6 +93,62 @@ app.post("/lcp/dispatch", async (req, res) => {
       case "switch_tab":
         result = await switchTabTool(params.index);
         break;
+      case "evaluate": {
+        const page = await engine.getPage();
+        result = await page.evaluate(params.code);
+        break;
+      }
+      case "file_upload": {
+        const page = await engine.getPage();
+        const input = page.locator(`[data-scout-id="${params.id}"]`).first();
+        await input.setInputFiles(params.path);
+        result = { status: "uploaded" };
+        break;
+      }
+      case "keyboard_type": {
+        const page = await engine.getPage();
+        await page.keyboard.type(params.text, { delay: params.delay ?? 20 });
+        result = { status: "typed" };
+        break;
+      }
+      case "keyboard_press": {
+        const page = await engine.getPage();
+        await page.keyboard.press(params.key);
+        result = { status: "pressed" };
+        break;
+      }
+      case "query_selector": {
+        const page = await engine.getPage();
+        const el = await page.locator(params.selector).first().elementHandle();
+        result = { found: el !== null };
+        break;
+      }
+      case "url": {
+        const page = await engine.getPage();
+        result = { url: page.url() };
+        break;
+      }
+      case "wait_for_selector": {
+        const page = await engine.getPage();
+        try {
+          await page.waitForSelector(params.selector, { timeout: params.timeout ?? 5000 });
+          result = { found: true };
+        } catch {
+          result = { found: false };
+        }
+        break;
+      }
+      case "screenshot": {
+        const page = await engine.getPage();
+        if (params.path) {
+          await page.screenshot({ path: params.path });
+          result = { path: params.path };
+        } else {
+          const buf = await page.screenshot();
+          result = { screenshot: buf.toString("base64") };
+        }
+        break;
+      }
       default:
         return res.status(404).json({ error: `Operation ${operation} not supported` });
     }
@@ -109,13 +182,10 @@ app.get("/lcp/stream", (req, res) => {
   });
 });
 
-// 4. Self-Mutation Port (Forge)
-app.post("/lcp/forge", (req, res) => {
-  res.json({ status: "restarting", message: "Applying Forge mutations... Scout will restart in 1 second." });
-  
-  setTimeout(() => {
-    process.exit(0);
-  }, 1000);
+// 4. Shutdown (graceful — requires auth if SCOUT_LCP_SECRET is set)
+app.post("/lcp/shutdown", requireSecret, (req, res) => {
+  res.json({ status: "shutting_down" });
+  setTimeout(() => process.exit(0), 500);
 });
 
 export function startLcpServer(port: number): Server {

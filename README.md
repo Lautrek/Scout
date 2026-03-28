@@ -1,28 +1,42 @@
 # Scout
 
-Hybrid A11y + Set-of-Marks browser MCP server. Gives AI agents a visually-grounded, semantically-precise view of any web page — without token explosion from raw HTML or hallucinated clicks from coordinate guessing.
+Browser MCP server that connects to your existing browser. Your sessions, passwords, extensions — all preserved. No bot detection because it IS your real browser.
+
+Gives AI agents a visually-grounded, semantically-precise view of any web page through hybrid A11y + Set-of-Marks grounding.
 
 ## Why Scout?
 
-Most browser MCP tools either dump raw HTML (expensive, noisy) or rely on coordinate-based clicking (fragile, hallucinates). Scout combines two complementary approaches:
+Most browser automation launches a **clean, disposable browser** — no cookies, no history, no extensions. Every site detects it as a bot. Scout flips this: it connects to the browser you're already using via Chrome DevTools Protocol (CDP).
 
+- **Connect to your browser** — attach to Chrome with `--remote-debugging-port`, reuse all your logged-in sessions
 - **Accessibility tree extraction** — scans the DOM for interactive elements, assigns each a stable numeric ID, returns a compact markdown summary
 - **Set-of-Marks badges** — overlays numbered badges on a compressed screenshot so the agent can _see_ what it's clicking
-- **State healer** — every action captures before/after state, telling the agent whether a click caused navigation, a modal, or a DOM change
+- **Non-blocking human handoff** — agent returns immediately, polls for completion. CAPTCHAs, MFA, SMS codes — you solve them in your own browser
+- **State healer** — every action captures before/after state, telling the agent what changed
 
-The result: agents reference elements by ID (`scout_click(3)`), not by CSS selector or pixel coordinate. No hallucination, no token bloat.
+The result: agents reference elements by ID (`scout_click(3)`), not by CSS selector or pixel coordinate. No hallucination, no token bloat, no bot detection.
 
 ## Quick start
+
+### Connect to your browser (recommended)
+
+```bash
+# 1. Start your browser with remote debugging enabled
+google-chrome --remote-debugging-port=9222
+
+# 2. Install and run Scout
+npm install
+SCOUT_MODE=connect SCOUT_CONNECT_URL=http://localhost:9222 npm run dev
+```
+
+Scout auto-discovers your browser and connects. All your open tabs, sessions, and saved passwords are available.
+
+### Launch a fresh browser
 
 ```bash
 npm install
 npx playwright install chromium
-
-# MCP stdio server (headed browser by default)
 npm run dev
-
-# Headless
-SCOUT_HEADLESS=true npm run dev
 ```
 
 ### Claude Desktop / Claude Code
@@ -35,7 +49,11 @@ Add to your MCP config:
     "scout": {
       "command": "npx",
       "args": ["tsx", "src/index.ts"],
-      "cwd": "/path/to/scout"
+      "cwd": "/path/to/scout",
+      "env": {
+        "SCOUT_MODE": "connect",
+        "SCOUT_CONNECT_URL": "http://localhost:9222"
+      }
     }
   }
 }
@@ -50,18 +68,25 @@ docker run -it scout
 
 ## Environment variables
 
+### Connection
 | Variable | Default | Description |
 |---|---|---|
-| `SCOUT_HEADLESS` | `false` | Run browser in headless mode |
-| `SCOUT_BROWSER` | `chromium` | Browser engine (`chromium` or `firefox`) |
-| `SCOUT_CDP_PORT` | `9229` | Chrome DevTools Protocol port for browser persistence |
+| `SCOUT_MODE` | `auto` | `connect` (attach to your browser), `launch` (start fresh), `auto` (try connect, fallback to launch) |
+| `SCOUT_CONNECT_URL` | — | Explicit browser debug URL, e.g. `http://localhost:9222` |
+
+### Browser
+| Variable | Default | Description |
+|---|---|---|
+| `SCOUT_HEADLESS` | `false` | Run browser in headless mode (only applies to launch mode) |
+| `SCOUT_BROWSER` | `chromium` | Browser engine for launch mode (`chromium` or `firefox`) |
+| `SCOUT_CDP_PORT` | `9229` | Debug port when launching a fresh browser |
 | `SCOUT_VIEWPORT_WIDTH` | `1280` | Browser viewport width |
 | `SCOUT_VIEWPORT_HEIGHT` | `800` | Browser viewport height |
 | `SCOUT_MAX_ELEMENTS` | `1000` | Max elements per snapshot |
 | `SCOUT_MAX_TABS` | `10` | Max open tabs |
-| `SCOUT_PROFILE_DIR` | — | Path to persistent browser profile (cookies survive restarts) |
-| `SCOUT_LOGIN_ENABLED` | `false` | Enable `scout_login` tool for automated social platform auth |
-| `SCOUT_LCP_PORT` | — | Enable HTTP dispatch server on this port (optional) |
+| `SCOUT_PROFILE_DIR` | — | Persistent browser profile path (launch mode only) |
+| `SCOUT_LOGIN_ENABLED` | `false` | Enable `scout_login` tool for automated platform auth |
+| `SCOUT_LCP_PORT` | — | Enable HTTP dispatch server on this port |
 
 ## Tools (27)
 
@@ -138,9 +163,25 @@ scout_navigate(url)
   → scout_handoff_check(handoff_id)   # poll until completed
 ```
 
+### Connection modes
+
+**Connect mode** (`SCOUT_MODE=connect`) — attaches to your running browser via CDP. Your open tabs, sessions, and passwords are all available. Start your browser with:
+
+```bash
+google-chrome --remote-debugging-port=9222
+```
+
+Scout auto-discovers the browser, or set `SCOUT_CONNECT_URL=http://localhost:9222` explicitly. The browser stays running independently — Scout just connects to it.
+
+**Launch mode** (`SCOUT_MODE=launch`) — starts a fresh Chromium instance. Use `SCOUT_PROFILE_DIR` for persistent cookies across restarts.
+
+**Auto mode** (`SCOUT_MODE=auto`, default) — tries to discover a running browser first. If none found, launches a fresh one. Best of both worlds.
+
 ### Browser persistence
 
-Scout writes the CDP port to `~/.scout-browser.port`. If the MCP process restarts, the next tool call reconnects to the still-running browser — tabs, sessions, and page state survive.
+In connect mode, Scout reconnects to your browser automatically if the MCP process restarts — the browser stays running.
+
+In launch mode, Scout writes the CDP port to `~/.scout-browser.port` and reconnects on restart if the browser is still alive.
 
 ### Non-blocking handoff
 
@@ -157,6 +198,8 @@ GET  /lcp/health              # Server status
 POST /lcp/dispatch             # Execute tool operations
 GET  /lcp/stream               # SSE event stream
 ```
+
+> **Security:** The LCP server has no built-in authentication by default. Set `SCOUT_LCP_SECRET` to require an `X-Scout-Secret` header on all mutation endpoints. **Do not expose the LCP port on a public network** without authentication — it provides full control over the connected browser session.
 
 ## License
 

@@ -1,12 +1,7 @@
 node_modules/
 dist/
 .env
+.credentials.env
 *.db
-
-# Internal tooling (not part of Scout)
-.beads/
-.crush/
-.claude/
-.pytest_cache/
-.venv/
 logs/
+.beads/

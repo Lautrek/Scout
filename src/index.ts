@@ -112,12 +112,13 @@ server.tool(
 // Click element by ID
 server.tool(
   "scout_click",
-  "Click an element by its snapshot ID. Returns healer result describing what changed. If stateChange is 'navigation', element IDs are now stale — call scout_snapshot before using any IDs again.",
+  "Click an element by its snapshot ID. Returns healer result describing what changed. If stateChange is 'navigation', element IDs are now stale — call scout_snapshot before using any IDs again. Use force=true to bypass overlay elements (shadow DOM, modals) that intercept clicks.",
   {
     id: z.number().int().positive().describe("Element ID from the last snapshot"),
+    force: z.boolean().optional().describe("Bypass overlay interception (default: false). Use when shadow DOM or modal overlays block normal clicks."),
   },
-  async ({ id }) => {
-    const result = await clickTool(id);
+  async ({ id, force }) => {
+    const result = await clickTool(id, force ?? false);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
@@ -141,19 +142,20 @@ server.tool(
   }
 );
 
-// Scroll the page
+// Scroll the page or a specific element
 server.tool(
   "scout_scroll",
-  "Scroll the page in a direction.",
+  "Scroll the page or a specific element (modal, dialog) in a direction. Use element_id to scroll within a container instead of the whole page.",
   {
     direction: z
       .enum(["up", "down", "left", "right"])
       .describe("Scroll direction"),
     pixels: z.number().int().positive().optional().describe("Pixels to scroll (default: 400)"),
+    element_id: z.number().int().positive().optional().describe("Element ID to scroll within (e.g. a modal or dialog). If omitted, scrolls the page."),
   },
-  async ({ direction, pixels }) => {
-    await scrollTool(direction, pixels);
-    return { content: [{ type: "text", text: "Scrolled" }] };
+  async ({ direction, pixels, element_id }) => {
+    await scrollTool(direction, pixels, element_id);
+    return { content: [{ type: "text", text: element_id ? `Scrolled element ${element_id}` : "Scrolled page" }] };
   }
 );
 
@@ -350,6 +352,25 @@ server.tool(
     const logs = engine.getLogs();
     if (clear) engine.clearLogs();
     return { content: [{ type: "text", text: logs.join("\n") || "No logs" }] };
+  }
+);
+
+// Execute JavaScript in the page context
+server.tool(
+  "scout_evaluate",
+  "Execute JavaScript in the current page and return the result. Use for: reading page state, clicking elements blocked by shadow DOM overlays, interacting with Web Components, or any DOM operation not covered by other tools. The code runs in the page context with full DOM access. Returns the serialized result.",
+  {
+    code: z.string().describe("JavaScript code to execute in the page. Must be a valid expression or IIFE. The return value is serialized to JSON."),
+  },
+  async ({ code }) => {
+    const page = await engine.getPage();
+    const result = await page.evaluate(code);
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify(result, null, 2),
+      }],
+    };
   }
 );
 

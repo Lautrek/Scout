@@ -2,7 +2,7 @@
   "name": "scout-mcp-server",
   "version": "0.1.0",
   "type": "module",
-  "description": "Hybrid A11y+SoM browser MCP server for agentic web automation",
+  "description": "Browser MCP server that connects to your existing browser — your sessions, passwords, and extensions preserved",
   "license": "MIT",
   "repository": {
     "type": "git",
