@@ -457,6 +457,113 @@ server.tool(
   }
 );
 
+// ── Platform adapter tools ─────────────────────────────────────────────────
+
+import { getAdapter, listPlatforms } from "./platforms/index.js";
+
+server.tool(
+  "scout_post",
+  "Compose and publish a post on a social platform (linkedin, x, medium). Uses the platform adapter pattern — handles shadow DOM, selectors, and compose flows automatically. The browser must be logged into the platform.",
+  {
+    platform: z.string().describe("Platform: linkedin, x, medium"),
+    text: z.string().describe("Post text. For Medium, first line becomes the title."),
+    submit: z.boolean().optional().describe("Actually submit the post (default: true). Set false for dry run — text is typed but not posted."),
+  },
+  async ({ platform, text, submit }) => {
+    const adapter = getAdapter(platform);
+    if (!adapter) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `Unknown platform: ${platform}`, supported: listPlatforms() }) }],
+      };
+    }
+    const page = await engine.getPage();
+
+    const loggedIn = await adapter.isLoggedIn(page);
+    if (!loggedIn) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `Not logged in to ${platform}. Log in via your browser first.` }) }],
+      };
+    }
+
+    const compose = await adapter.compose(page, text);
+    if (!compose.success) {
+      return { content: [{ type: "text", text: JSON.stringify(compose) }] };
+    }
+
+    if (submit === false) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ success: true, status: "dry_run", message: "Text composed but not submitted" }) }],
+      };
+    }
+
+    const result = await adapter.submitPost(page);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "scout_my_posts",
+  "Get your recent posts on a platform.",
+  {
+    platform: z.string().describe("Platform: linkedin, x, medium"),
+    limit: z.number().int().positive().optional().describe("Max posts to return (default: 10)"),
+  },
+  async ({ platform, limit }) => {
+    const adapter = getAdapter(platform);
+    if (!adapter) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `Unknown platform: ${platform}` }) }],
+      };
+    }
+    const page = await engine.getPage();
+    const posts = await adapter.getMyPosts(page, limit ?? 10);
+    return { content: [{ type: "text", text: JSON.stringify(posts, null, 2) }] };
+  }
+);
+
+server.tool(
+  "scout_delete_post",
+  "Delete one of your posts on a platform.",
+  {
+    platform: z.string().describe("Platform: linkedin, x, medium"),
+    post_id: z.string().describe("Post ID or URL to delete"),
+  },
+  async ({ platform, post_id }) => {
+    const adapter = getAdapter(platform);
+    if (!adapter) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `Unknown platform: ${platform}` }) }],
+      };
+    }
+    const page = await engine.getPage();
+    const deleted = await adapter.deletePost(page, post_id);
+    return {
+      content: [{ type: "text", text: JSON.stringify({ success: deleted }) }],
+    };
+  }
+);
+
+server.tool(
+  "scout_search_posts",
+  "Search for posts on a platform.",
+  {
+    platform: z.string().describe("Platform: linkedin, x, medium"),
+    query: z.string().describe("Search query"),
+    limit: z.number().int().positive().optional().describe("Max results (default: 10)"),
+  },
+  async ({ platform, query, limit }) => {
+    const adapter = getAdapter(platform);
+    if (!adapter) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `Unknown platform: ${platform}` }) }],
+      };
+    }
+    const page = await engine.getPage();
+    const posts = await adapter.searchPosts(page, query, limit ?? 10);
+    return { content: [{ type: "text", text: JSON.stringify(posts, null, 2) }] };
+  }
+);
+
 // Graceful shutdown
 process.on("SIGINT", async () => {
   await engine.close();
