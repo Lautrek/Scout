@@ -18,6 +18,7 @@ import { dragTool } from "./tools/drag.js";
 import { saveSession, loadSession, listSessions } from "./tools/session.js";
 import { loginTool } from "./tools/login.js";
 import { tabsTool, switchTabTool, newTabTool } from "./tools/tabs.js";
+import { startLcpServer } from "./lcp.js";
 import { engine } from "./browser/engine.js";
 
 const server = new McpServer({
@@ -319,22 +320,24 @@ server.tool(
   }
 );
 
-// High-level platform login
-server.tool(
-  "scout_login",
-  "Log in to a social platform automatically. Handles multi-step flows and unusual activity challenges. Auto-saves the session on success (no need to call scout_save_session). Twitter accepts username; LinkedIn/Instagram/Facebook expect email. Returns {success, url, challenge_type?, error?} — always check success before proceeding.",
-  {
-    platform: z.enum(["twitter", "linkedin", "instagram", "facebook"]).describe("Platform to log in to"),
-    username: z.string().describe("Username (twitter) or email (linkedin, instagram, facebook)"),
-    password: z.string().describe("Password"),
-  },
-  async ({ platform, username, password }) => {
-    const result = await loginTool(platform, username, password);
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-    };
-  }
-);
+// High-level platform login (opt-in: set SCOUT_LOGIN_ENABLED=true)
+if (process.env.SCOUT_LOGIN_ENABLED === "true") {
+  server.tool(
+    "scout_login",
+    "Log in to a social platform automatically. Handles multi-step flows and unusual activity challenges. Auto-saves the session on success (no need to call scout_save_session). Twitter accepts username; LinkedIn/Instagram/Facebook expect email. Returns {success, url, challenge_type?, error?} — always check success before proceeding.",
+    {
+      platform: z.enum(["twitter", "linkedin", "instagram", "facebook"]).describe("Platform to log in to"),
+      username: z.string().describe("Username (twitter) or email (linkedin, instagram, facebook)"),
+      password: z.string().describe("Password"),
+    },
+    async ({ platform, username, password }) => {
+      const result = await loginTool(platform, username, password);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    }
+  );
+}
 
 // Console logs
 server.tool(
@@ -445,6 +448,12 @@ process.on("SIGTERM", async () => {
 });
 
 // Navigation listener is attached lazily per-page via engine._setupPage
+
+// Start LCP HTTP server if port is configured
+const lcpPort = process.env.SCOUT_LCP_PORT ? parseInt(process.env.SCOUT_LCP_PORT, 10) : null;
+if (lcpPort) {
+  startLcpServer(lcpPort);
+}
 
 // Start server
 const transport = new StdioServerTransport();

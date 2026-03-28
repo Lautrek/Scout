@@ -22,6 +22,7 @@ COPY src/ ./src/
 
 # Use system Chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV SCOUT_HEADLESS=true
 
 CMD ["npx", "tsx", "src/index.ts"]

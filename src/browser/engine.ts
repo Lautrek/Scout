@@ -14,11 +14,14 @@ const VIEWPORT_WIDTH = parseInt(process.env.SCOUT_VIEWPORT_WIDTH ?? "1280");
 const VIEWPORT_HEIGHT = parseInt(process.env.SCOUT_VIEWPORT_HEIGHT ?? "800");
 const CDP_PORT = parseInt(process.env.SCOUT_CDP_PORT ?? "9229");
 const PORT_FILE = path.join(os.homedir(), ".scout-browser.port");
+const MAX_TABS = parseInt(process.env.SCOUT_MAX_TABS ?? "5");
 
 // Browser selection: "chromium" (default) or "firefox"
 const BROWSER_TYPE = (process.env.SCOUT_BROWSER ?? "chromium").toLowerCase();
 // Persistent profile directory — cookies/sessions survive restarts
 const PROFILE_DIR = process.env.SCOUT_PROFILE_DIR ?? "";
+// Executable path for Playwright (especially important for Docker)
+const EXECUTABLE_PATH = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 
 class BrowserEngine {
   private browser: Browser | null = null;
@@ -111,8 +114,21 @@ class BrowserEngine {
 
   /** Open a new tab and make it active. */
   async newPage(): Promise<Page> {
+    console.error("Scout: creating new page");
     await this._ensureBrowser();
+    if (!this.context) {
+      throw new Error("Browser context not available after _ensureBrowser");
+    }
+
+    // Enforce tab limit
+    const pages = this.context.pages();
+    if (pages.length >= MAX_TABS) {
+      console.error(`Scout: tab limit reached (${MAX_TABS}), closing oldest tab`);
+      await pages[0].close();
+    }
+
     this._activePage = await this.context!.newPage();
+    console.error(`Scout: new page created, total pages: ${this.context!.pages().length}`);
     return this._activePage;
   }
 
@@ -156,6 +172,7 @@ class BrowserEngine {
         headless: HEADLESS,
         args,
         viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+        executablePath: BROWSER_TYPE === "chromium" ? EXECUTABLE_PATH : undefined,
       });
       this._persistent = true;
       this.browser = null;
@@ -221,7 +238,11 @@ class BrowserEngine {
       ? ["--no-sandbox", "--disable-dev-shm-usage", `--remote-debugging-port=${CDP_PORT}`]
       : [];
 
-    this.browser = await browserType.launch({ headless: HEADLESS, args });
+    this.browser = await browserType.launch({
+      headless: HEADLESS,
+      args,
+      executablePath: BROWSER_TYPE === "chromium" ? EXECUTABLE_PATH : undefined,
+    });
     this.context = await this.browser.newContext({
       viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
       storageState: storageStatePath,

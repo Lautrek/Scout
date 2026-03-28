@@ -1,4 +1,12 @@
-
-# Dolt database files (added by bd init)
-.dolt/
+node_modules/
+dist/
+.env
 *.db
+
+# Internal tooling (not part of Scout)
+.beads/
+.crush/
+.claude/
+.pytest_cache/
+.venv/
+logs/
