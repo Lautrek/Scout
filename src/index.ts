@@ -460,6 +460,7 @@ server.tool(
 // ── Platform adapter tools ─────────────────────────────────────────────────
 
 import { getAdapter, listPlatforms } from "./platforms/index.js";
+import type { PlatformAdapter } from "./platforms/types.js";
 
 server.tool(
   "scout_post",

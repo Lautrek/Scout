@@ -5,16 +5,16 @@
  * New platforms are added here — one import, one registry entry.
  */
 
-import { PlatformAdapter } from "./types.js";
+import type { PlatformAdapter } from "./types.js";
 import { LinkedInAdapter } from "./linkedin.js";
 import { XAdapter } from "./x.js";
 import { MediumAdapter } from "./medium.js";
 
 const adapters: Record<string, PlatformAdapter> = {
-  linkedin: new LinkedInAdapter(),
-  x: new XAdapter(),
-  twitter: new XAdapter(), // alias
-  medium: new MediumAdapter(),
+  linkedin: new LinkedInAdapter() as any,
+  x: new XAdapter() as any,
+  twitter: new XAdapter() as any, // alias
+  medium: new MediumAdapter() as any,
 };
 
 export function getAdapter(platform: string): PlatformAdapter | null {
@@ -26,5 +26,5 @@ export function listPlatforms(): string[] {
   return [...new Set(Object.keys(adapters))];
 }
 
-export { PlatformAdapter, LinkedInAdapter, XAdapter, MediumAdapter };
-export type { Post, ComposeResult, PostResult } from "./types.js";
+export { LinkedInAdapter, XAdapter, MediumAdapter };
+export type { PlatformAdapter, Post, ComposeResult, PostResult } from "./types.js";
