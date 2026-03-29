@@ -11,10 +11,10 @@ export async function captureWithBadges(
     const client: CDPSession = await page.context().newCDPSession(page);
     try {
       await injectBadges(page, elements, client);
-      const screenshotBuffer = await page.screenshot({ type: "png" });
+      const screenshotBuffer = await page.screenshot({ type: "jpeg", quality: 50 });
       const compressed = await sharp(screenshotBuffer)
-        .resize({ width: 1280, withoutEnlargement: true })
-        .png({ compressionLevel: 7 })
+        .resize({ width: 800, withoutEnlargement: true })
+        .jpeg({ quality: 50 })
         .toBuffer();
       return compressed.toString("base64");
     } finally {
@@ -25,10 +25,10 @@ export async function captureWithBadges(
     // CDP not available (Firefox) — plain screenshot with DOM-injected badges
     await injectBadgesDom(page, elements);
     try {
-      const screenshotBuffer = await page.screenshot({ type: "png" });
+      const screenshotBuffer = await page.screenshot({ type: "jpeg", quality: 50 });
       const compressed = await sharp(screenshotBuffer)
-        .resize({ width: 1280, withoutEnlargement: true })
-        .png({ compressionLevel: 7 })
+        .resize({ width: 800, withoutEnlargement: true })
+        .jpeg({ quality: 50 })
         .toBuffer();
       return compressed.toString("base64");
     } finally {
@@ -162,10 +162,10 @@ async function removeBadges(page: Page): Promise<void> {
 }
 
 export async function captureScreenshot(page: Page): Promise<string> {
-  const screenshotBuffer = await page.screenshot({ type: "png" });
+  const screenshotBuffer = await page.screenshot({ type: "jpeg", quality: 50 });
   const compressed = await sharp(screenshotBuffer)
-    .resize({ width: 1280, withoutEnlargement: true })
-    .png({ compressionLevel: 7 })
+    .resize({ width: 800, withoutEnlargement: true })
+    .jpeg({ quality: 50 })
     .toBuffer();
   return compressed.toString("base64");
 }

@@ -60,7 +60,7 @@ server.tool(
           ),
         },
         ...(full.screenshot
-          ? [{ type: "image" as const, data: full.screenshot, mimeType: "image/png" as const }]
+          ? [{ type: "image" as const, data: full.screenshot, mimeType: "image/jpeg" as const }]
           : []),
       ],
     };
@@ -87,7 +87,7 @@ server.tool(
           ),
         },
         ...(result.screenshot
-          ? [{ type: "image" as const, data: result.screenshot, mimeType: "image/png" as const }]
+          ? [{ type: "image" as const, data: result.screenshot, mimeType: "image/jpeg" as const }]
           : []),
       ],
     };
@@ -121,7 +121,7 @@ server.tool(
     const result = await screenshotTool();
     return {
       content: [
-        { type: "image" as const, data: result.screenshot, mimeType: "image/png" as const },
+        { type: "image" as const, data: result.screenshot, mimeType: "image/jpeg" as const },
       ],
     };
   }
