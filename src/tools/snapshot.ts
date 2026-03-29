@@ -3,7 +3,12 @@ import { extractA11yElements, buildMarkdown, clearElements } from "../browser/a1
 import { captureWithBadges } from "../browser/som.js";
 import { SnapshotResult } from "../types.js";
 
-export async function snapshotTool(): Promise<SnapshotResult> {
+/**
+ * Snapshot the current page.
+ * lite=false (default): full A11y scan + badges + screenshot (~50-200K tokens)
+ * lite=true: elements + markdown only, no screenshot (~5-15K tokens)
+ */
+export async function snapshotTool(lite = false): Promise<SnapshotResult> {
   const page = await engine.getPage();
 
   clearElements();
@@ -12,7 +17,9 @@ export async function snapshotTool(): Promise<SnapshotResult> {
   const url = page.url();
   const title = await page.title();
   const markdown = buildMarkdown(url, title, elements);
-  const screenshot = await captureWithBadges(page, elements);
+
+  // Lite mode: skip the expensive screenshot + badge overlay
+  const screenshot = lite ? undefined : await captureWithBadges(page, elements);
 
   return {
     url,

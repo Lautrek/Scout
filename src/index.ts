@@ -26,38 +26,56 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
-// Navigate to URL and return full snapshot
+// Navigate to URL — lean by default (~50 tokens), full snapshot opt-in
 server.tool(
   "scout_navigate",
-  "Navigate to a URL. Returns a snapshot with accessibility tree (numbered elements) and screenshot with visual badges.",
-  { url: z.string().url().describe("URL to navigate to") },
-  async ({ url }) => {
-    const result = await navigateTool(url);
+  "Navigate to a URL. Returns {url, title} by default (lean). Set snapshot=true for full accessibility tree + screenshot (expensive — use only when you need to discover page structure).",
+  {
+    url: z.string().url().describe("URL to navigate to"),
+    snapshot: z.boolean().optional().describe("Include full A11y scan + screenshot (default: false). Only use when you need to discover unknown page structure."),
+  },
+  async ({ url, snapshot }) => {
+    const result = await navigateTool(url, snapshot ?? false);
+
+    // Lean response
+    if (!snapshot) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ url: result.url, title: result.title, timestamp: result.timestamp }),
+        }],
+      };
+    }
+
+    // Full snapshot response
+    const full = result as any;
     return {
       content: [
         {
           type: "text",
           text: JSON.stringify(
-            { url: result.url, title: result.title, timestamp: result.timestamp, elements: result.elements, markdown: result.markdown },
+            { url: full.url, title: full.title, timestamp: full.timestamp, elements: full.elements, markdown: full.markdown },
             null,
             2
           ),
         },
-        ...(result.screenshot
-          ? [{ type: "image" as const, data: result.screenshot, mimeType: "image/png" as const }]
+        ...(full.screenshot
+          ? [{ type: "image" as const, data: full.screenshot, mimeType: "image/png" as const }]
           : []),
       ],
     };
   }
 );
 
-// Snapshot current page
+// Snapshot current page — full or lite
 server.tool(
   "scout_snapshot",
-  "Take a snapshot of the current page. Returns accessibility tree (numbered elements) and screenshot with visual badges.",
-  {},
-  async () => {
-    const result = await snapshotTool();
+  "Take a snapshot of the current page. Returns accessibility tree (numbered elements). Set lite=true to skip the screenshot (saves ~50K+ tokens). Use full snapshot only when you need to visually see the page.",
+  {
+    lite: z.boolean().optional().describe("Skip screenshot + badge overlay (default: false). Use true when you only need element IDs, not vision."),
+  },
+  async ({ lite }) => {
+    const result = await snapshotTool(lite ?? false);
     return {
       content: [
         {

@@ -3,7 +3,21 @@ import { extractA11yElements, buildMarkdown, clearElements } from "../browser/a1
 import { captureWithBadges } from "../browser/som.js";
 import { SnapshotResult } from "../types.js";
 
-export async function navigateTool(url: string): Promise<SnapshotResult> {
+export interface NavigateResult {
+  url: string;
+  title: string;
+  timestamp: string;
+}
+
+/**
+ * Navigate to a URL.
+ * By default returns only {url, title} (~50 tokens).
+ * With snapshot=true, returns full A11y scan + screenshot (~50-200K tokens).
+ */
+export async function navigateTool(
+  url: string,
+  snapshot = false
+): Promise<NavigateResult | SnapshotResult> {
   const page = await engine.getPage();
 
   clearElements();
@@ -17,11 +31,22 @@ export async function navigateTool(url: string): Promise<SnapshotResult> {
     // Timeout is fine — proceed with what we have
   }
 
-  const elements = await extractA11yElements(page);
   const currentUrl = page.url();
   const title = await page.title();
+
+  // Lean mode: just URL + title
+  if (!snapshot) {
+    return {
+      url: currentUrl,
+      title,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // Full snapshot mode
+  const elements = await extractA11yElements(page);
   const markdown = buildMarkdown(currentUrl, title, elements);
-  const screenshot = await captureWithBadges(page, elements);
+  const screenshotData = await captureWithBadges(page, elements);
 
   return {
     url: currentUrl,
@@ -29,6 +54,6 @@ export async function navigateTool(url: string): Promise<SnapshotResult> {
     timestamp: new Date().toISOString(),
     elements,
     markdown,
-    screenshot,
+    screenshot: screenshotData,
   };
 }
