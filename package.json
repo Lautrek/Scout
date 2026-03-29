@@ -1,5 +1,5 @@
 {
-  "name": "scout-mcp-server",
+  "name": "@lautrek/scout",
   "version": "0.1.0",
   "type": "module",
   "description": "Browser MCP server that connects to your existing browser — your sessions, passwords, and extensions preserved",
@@ -13,6 +13,17 @@
   "engines": {
     "node": ">=20.0.0"
   },
+  "bin": {
+    "scout-mcp-server": "./mcp_start.sh"
+  },
+  "files": [
+    "src/",
+    "tsconfig.json",
+    "mcp_start.sh",
+    "LICENSE",
+    "README.md",
+    ".env.example"
+  ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc --project tsconfig.json",
