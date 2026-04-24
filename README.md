@@ -1,20 +1,21 @@
 # Scout
 
-Browser MCP server that connects to your existing browser. Your sessions, passwords, extensions — all preserved. No bot detection because it IS your real browser.
+Browser automation MCP server that gives AI agents precise, reliable control of any web page. Connects to your existing browser so your sessions, passwords, and extensions are all available — or launches a fresh instance when you need isolation.
 
-Gives AI agents a visually-grounded, semantically-precise view of any web page through hybrid A11y + Set-of-Marks grounding.
+Combines accessibility tree extraction with Set-of-Marks visual grounding for the most accurate browser automation available to AI agents.
 
 ## Why Scout?
 
-Most browser automation launches a **clean, disposable browser** — no cookies, no history, no extensions. Every site detects it as a bot. Scout flips this: it connects to the browser you're already using via Chrome DevTools Protocol (CDP).
+Browser automation for AI agents needs two things: **accuracy** (click the right element) and **context** (understand what's on the page). Most tools give agents raw HTML or pixel screenshots and hope for the best. Scout gives them both a semantic element list and a visually-annotated screenshot — so they always know exactly what they're interacting with.
 
-- **Connect to your browser** — attach to Chrome with `--remote-debugging-port`, reuse all your logged-in sessions
+- **Connect to your browser** — attach to Chrome with `--remote-debugging-port`, reuse all your logged-in sessions, or launch a fresh isolated instance
 - **Accessibility tree extraction** — scans the DOM for interactive elements, assigns each a stable numeric ID, returns a compact markdown summary
 - **Set-of-Marks badges** — overlays numbered badges on a compressed screenshot so the agent can _see_ what it's clicking
-- **Non-blocking human handoff** — agent returns immediately, polls for completion. CAPTCHAs, MFA, SMS codes — you solve them in your own browser
+- **Non-blocking human handoff** — agent returns immediately, polls for completion. CAPTCHAs, MFA, SMS codes — you handle them in your browser while the agent waits
 - **State healer** — every action captures before/after state, telling the agent what changed
+- **Session persistence** — save and restore browser sessions across agent restarts
 
-The result: agents reference elements by ID (`scout_click(3)`), not by CSS selector or pixel coordinate. No hallucination, no token bloat, no bot detection.
+The result: agents reference elements by ID (`scout_click(3)`), not by CSS selector or pixel coordinate. No hallucination, no token bloat, consistent results.
 
 ## Quick start
 

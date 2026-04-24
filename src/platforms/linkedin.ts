@@ -13,6 +13,7 @@ import {
   ComposeResult,
   PostResult,
 } from "./types.js";
+import { getHumanizer } from "../../../../lib/agent/humanizer.js";
 
 /** Time to wait for various UI transitions (ms) */
 const WAIT = {
@@ -34,7 +35,8 @@ export class LinkedInAdapter implements PlatformAdapter {
     }
     // Navigate to feed and check
     await page.goto(this.homeUrl, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(WAIT.pageLoad);
+    const human = getHumanizer(page);
+    await human.sleep(2000, 4000);
     const finalUrl = page.url();
     return (
       finalUrl.includes("/feed") &&
@@ -112,44 +114,36 @@ export class LinkedInAdapter implements PlatformAdapter {
 
   async compose(page: Page, text: string): Promise<ComposeResult> {
     try {
+      const human = getHumanizer(page);
+      
       // Open compose via URL param (most reliable)
       await page.goto(this.homeUrl + "?shareActive=true", {
         waitUntil: "domcontentloaded",
       });
-      await page.waitForTimeout(WAIT.pageLoad);
+      await human.sleep(2000, 4000);
 
       // Focus editor in shadow DOM, clear any existing content
-      const focused = await page.evaluate(() => {
-        const host = document.querySelector("#interop-outlet");
+      const editorSelector = 'div[contenteditable="true"]';
+      const hostSelector = "#interop-outlet";
+      
+      const focused = await page.evaluate(({hostSel, editSel}) => {
+        const host = document.querySelector(hostSel);
         if (!host?.shadowRoot) return false;
-        const editor = host.shadowRoot.querySelector(
-          'div[contenteditable="true"]'
-        ) as HTMLElement;
+        const editor = host.shadowRoot.querySelector(editSel) as HTMLElement;
         if (!editor) return false;
         editor.innerHTML = "";
         editor.focus();
         editor.click();
         return true;
-      });
+      }, {hostSel: hostSelector, editSel: editorSelector});
 
       if (!focused) {
         return { success: false, error: "Could not find or focus LinkedIn editor (shadow DOM)" };
       }
 
-      await page.waitForTimeout(500);
+      await human.sleep(500, 1000);
+      await human.type(hostSelector, text); // Humanizer.type will click the host first, then we type
 
-      // Type via keyboard (respects shadow DOM focus)
-      const lines = text.split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i]) {
-          await page.keyboard.type(lines[i], { delay: 8 });
-        }
-        if (i < lines.length - 1) {
-          await page.keyboard.press("Enter");
-        }
-      }
-
-      await page.waitForTimeout(WAIT.afterType);
       return { success: true };
     } catch (e: any) {
       return { success: false, error: e.message };
@@ -158,33 +152,31 @@ export class LinkedInAdapter implements PlatformAdapter {
 
   async submitPost(page: Page): Promise<PostResult> {
     try {
-      // Wait for link preview to load
-      await page.waitForTimeout(WAIT.linkPreview);
+      const human = getHumanizer(page);
+      // Wait for link preview to load naturally
+      await human.sleep(4000, 6000);
 
       // Find and click Post button in shadow DOM
-      const result = await page.evaluate(() => {
-        const host = document.querySelector("#interop-outlet");
-        if (!host?.shadowRoot) return { success: false, error: "no shadow root" };
+      const clicked = await page.evaluate((hostSel) => {
+        const host = document.querySelector(hostSel);
+        if (!host?.shadowRoot) return false;
 
         const btns = host.shadowRoot.querySelectorAll("button");
         for (const b of btns) {
           if (b.textContent?.trim() === "Post" && !b.disabled) {
             b.scrollIntoView({ block: "center" });
             b.click();
-            return { success: true };
+            return true;
           }
         }
-        return {
-          success: false,
-          error: "Post button not found or disabled",
-        };
-      });
+        return false;
+      }, "#interop-outlet");
 
-      if (!result.success) {
-        return result as PostResult;
+      if (!clicked) {
+        return { success: false, error: "Post button not found or disabled" };
       }
 
-      await page.waitForTimeout(WAIT.afterPost);
+      await human.sleep(3000, 5000);
       return { success: true, url: page.url() };
     } catch (e: any) {
       return { success: false, error: e.message };

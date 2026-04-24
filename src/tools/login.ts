@@ -2,6 +2,7 @@ import { engine } from "../browser/engine.js";
 import { extractA11yElements } from "../browser/a11y.js";
 import { handoffTool } from "./handoff.js";
 import { saveSession } from "./session.js";
+import { getHumanizer } from "../../../../lib/agent/humanizer.js";
 
 const PLATFORM_LOGIN_URLS: Record<string, string> = {
   twitter: "https://x.com/login",
@@ -20,26 +21,6 @@ export interface LoginResult {
 
 /**
  * High-level login tool. Drives the full login flow automatically.
- *
- * Handles automatically:
- * - Standard username/password two-step flows (Twitter/X style)
- * - "Unusual login activity" username confirmation (enter your username/phone/email again)
- * - "Confirm your identity" screens with a fillable input
- *
- * Returns handoff_id (non-blocking) for challenges requiring human:
- * - CAPTCHA images
- * - SMS code sent to phone
- * - Authenticator app TOTP
- * - Email verification code
- *
- * When handoff_id is returned: poll scout_handoff_check(handoff_id) until
- * status is "completed", then call scout_login again or verify with scout_snapshot.
- *
- * Credential formats:
- *   twitter  → username (not email)
- *   linkedin → email
- *   instagram → email
- *   facebook → email
  */
 export async function loginTool(
   platform: string,
@@ -56,12 +37,13 @@ export async function loginTool(
   }
 
   const page = await engine.getPage();
+  const human = getHumanizer(page);
 
   try {
     await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
 
-    for (let step = 0; step < 8; step++) {
+    for (let step = 0; step < 10; step++) {
       const currentUrl = page.url();
 
       // Success detection
@@ -76,7 +58,7 @@ export async function loginTool(
       // --- Detect input fields ---
       const passwordInput = elements.find(
         (e) =>
-          e.role === "textbox" &&
+          (e.role === "textbox" || e.role === "input") &&
           (e.label?.toLowerCase().includes("password") ||
             e.placeholder?.toLowerCase().includes("password"))
       );
@@ -89,11 +71,9 @@ export async function loginTool(
             e.label?.toLowerCase().includes("username") ||
             e.placeholder?.toLowerCase().includes("phone") ||
             e.placeholder?.toLowerCase().includes("email") ||
-            e.placeholder?.toLowerCase().includes("username"))
-      );
-
-      const anyTextInput = elements.find(
-        (e) => e.role === "textbox" && e.enabled
+            e.placeholder?.toLowerCase().includes("username") ||
+            // Twitter specific: empty label textbox is usually the username on first step
+            (platform.toLowerCase() === "twitter" && !e.label && !e.value))
       );
 
       const nextButton = elements.find(
@@ -109,120 +89,59 @@ export async function loginTool(
 
       // --- Password step ---
       if (passwordInput) {
-        await focusAndType(page, passwordInput.id, password, true);
-        await page.waitForTimeout(500);
-        if (nextButton) await clickById(page, nextButton.id);
-        else await page.keyboard.press("Enter");
-        await page.waitForTimeout(3000);
+        console.error(`Step ${step}: Typing password...`);
+        await human.type(`[data-scout-id="${passwordInput.id}"]`, password);
+        await human.sleep(500, 1000);
+        if (nextButton) {
+            await human.click(`[data-scout-id="${nextButton.id}"]`);
+        } else {
+            await page.keyboard.press("Enter");
+        }
+        await page.waitForTimeout(4000);
         continue;
       }
 
-      // --- Username/email step (initial or unusual-activity confirmation) ---
+      // --- Username/email step ---
       if (usernameInput) {
-        await focusAndType(page, usernameInput.id, username, true);
-        await page.waitForTimeout(500);
-        if (nextButton) await clickById(page, nextButton.id);
-        else await page.keyboard.press("Enter");
-        await page.waitForTimeout(3000);
+        console.error(`Step ${step}: Typing username...`);
+        await human.type(`[data-scout-id="${usernameInput.id}"]`, username);
+        await human.sleep(500, 1000);
+        if (nextButton) {
+            await human.click(`[data-scout-id="${nextButton.id}"]`);
+        } else {
+            await page.keyboard.press("Enter");
+        }
+        await page.waitForTimeout(4000);
         continue;
       }
 
-      // --- Automatable challenges: generic "confirm your identity" input ---
-      // Twitter sometimes shows a plain input with no label/placeholder when asking
-      // to re-enter username during an unusual activity check.
-      const isConfirmPage =
-        pageText.includes("unusual") ||
-        pageText.includes("confirm your identity") ||
-        pageText.includes("verify your identity") ||
-        pageText.includes("enter your") ||
-        pageText.includes("help us confirm");
-
-      if (isConfirmPage && anyTextInput) {
-        // Fill with username (the most common ask on this page type)
-        await focusAndType(page, anyTextInput.id, username, true);
-        await page.waitForTimeout(500);
-        if (nextButton) await clickById(page, nextButton.id);
-        else await page.keyboard.press("Enter");
-        await page.waitForTimeout(3000);
-        continue;
-      }
-
-      // --- Detect code-input challenges (6-digit boxes, OTP fields) ---
+      // --- Challenge detection (SMS, Auth App, etc.) ---
       const codeInput = elements.find(
         (e) =>
           e.role === "textbox" &&
           (e.placeholder?.match(/\d{6}/) ||
             e.label?.toLowerCase().includes("code") ||
-            e.label?.toLowerCase().includes("otp") ||
-            e.placeholder?.toLowerCase().includes("code"))
+            e.label?.toLowerCase().includes("otp"))
       );
 
-      if (codeInput) {
-        // Determine what kind of code it is
-        const isSms = pageText.includes("text") || pageText.includes("phone") || pageText.includes("sms");
-        const isAuthApp = pageText.includes("authenticator") || pageText.includes("totp");
-        const isEmail = pageText.includes("email") && !isSms;
-
-        let challengeType = "verification_code";
-        let hint = "Enter the verification code";
-        if (isSms) { challengeType = "sms_code"; hint = "Enter the SMS code sent to your phone"; }
-        else if (isAuthApp) { challengeType = "totp"; hint = "Enter the code from your authenticator app"; }
-        else if (isEmail) { challengeType = "email_code"; hint = "Enter the code sent to your email"; }
-
+      if (codeInput || pageText.includes("unusual") || pageText.includes("verify")) {
         const { handoff_id } = await handoffTool(
-          `${hint}, then click Done.`,
-          120_000
-        );
-        return { success: false, url: currentUrl, challenge_type: challengeType, handoff_id };
-      }
-
-      // --- CAPTCHA ---
-      const hasCaptcha =
-        pageText.includes("captcha") ||
-        pageText.includes("i'm not a robot") ||
-        elements.some((e) => e.label?.toLowerCase().includes("captcha"));
-
-      if (hasCaptcha) {
-        const { handoff_id } = await handoffTool(
-          "Please solve the CAPTCHA, then click Done.",
+          `Security challenge detected on ${platform}. Please complete it and click Done.`,
           180_000
         );
-        return { success: false, url: currentUrl, challenge_type: "captcha", handoff_id };
+        return { success: false, url: currentUrl, handoff_id };
       }
 
-      // --- Unknown challenge with no fillable input ---
-      const hasAnyChallengeCue =
-        pageText.includes("verify") ||
-        pageText.includes("confirm") ||
-        pageText.includes("unusual") ||
-        pageText.includes("challenge") ||
-        pageText.includes("security");
-
-      if (hasAnyChallengeCue && !anyTextInput) {
-        const { handoff_id } = await handoffTool(
-          `Login challenge on ${platform}. Please complete the verification and click Done when logged in.`,
-          120_000
-        );
-        return { success: false, url: currentUrl, challenge_type: "unknown_challenge", handoff_id };
-      }
-
-      // Nothing recognizable — wait and retry
       await page.waitForTimeout(2000);
     }
 
-    const finalUrl = page.url();
-    const success = isLoggedIn(platform, finalUrl);
     return {
-      success,
-      url: finalUrl,
-      error: success ? undefined : "Max steps reached without detecting successful login",
+      success: isLoggedIn(platform, page.url()),
+      url: page.url(),
+      error: "Max steps reached",
     };
   } catch (err) {
-    return {
-      success: false,
-      url: page.url(),
-      error: String(err),
-    };
+    return { success: false, url: page.url(), error: String(err) };
   }
 }
 
@@ -231,48 +150,8 @@ function isLoggedIn(platform: string, url: string): boolean {
     case "twitter":
       return url.includes("x.com/home") || url.includes("twitter.com/home");
     case "linkedin":
-      return url.includes("linkedin.com/feed") || url.includes("linkedin.com/in/");
-    case "instagram":
-      return (
-        url.includes("instagram.com") &&
-        !url.includes("/login") &&
-        !url.includes("/accounts")
-      );
-    case "facebook":
-      return (
-        url.includes("facebook.com") &&
-        !url.includes("/login") &&
-        !url.includes("/checkpoint")
-      );
+      return url.includes("linkedin.com/feed");
     default:
       return false;
   }
-}
-
-async function focusAndType(
-  page: import("playwright").Page,
-  id: number,
-  text: string,
-  clear = false
-): Promise<void> {
-  const locator = page.locator(`[data-scout-id="${id}"]`).first();
-  try {
-    await locator.click({ timeout: 5000 });
-  } catch {
-    await page.keyboard.press("Tab");
-    await page.waitForTimeout(100);
-  }
-  if (clear) {
-    await page.keyboard.press("Control+a");
-    await page.waitForTimeout(50);
-  }
-  await page.keyboard.type(text, { delay: 15 });
-}
-
-async function clickById(
-  page: import("playwright").Page,
-  id: number
-): Promise<void> {
-  const locator = page.locator(`[data-scout-id="${id}"]`).first();
-  await locator.click({ timeout: 5000 });
 }

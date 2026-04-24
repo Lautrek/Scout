@@ -69,6 +69,71 @@ server.tool(
 
 // Snapshot current page — full or lite
 server.tool(
+  "scout_status",
+  "Get the current status of the Scout browser connection, including active tabs, connection mode, and login presence for social platforms.",
+  {},
+  async () => {
+    const isConnected = engine.isConnected;
+    let tabs: any[] = [];
+    try {
+      tabs = await tabsTool();
+    } catch (e) {
+      // Browser might not be started yet
+    }
+
+    const platformStatus: Record<string, any> = {
+      twitter: { logged_in: false, url: null },
+      linkedin: { logged_in: false, url: null },
+      instagram: { logged_in: false, url: null },
+      facebook: { logged_in: false, url: null },
+      youtube: { logged_in: false, url: null },
+    };
+
+    for (const tab of tabs) {
+      const url = tab.url.toLowerCase();
+      if (url.includes("x.com") || url.includes("twitter.com")) {
+        platformStatus.twitter.url = tab.url;
+        if (url.includes("/home") || url.includes("/explore")) platformStatus.twitter.logged_in = true;
+      }
+      if (url.includes("linkedin.com")) {
+        platformStatus.linkedin.url = tab.url;
+        if (url.includes("/feed")) platformStatus.linkedin.logged_in = true;
+      }
+      if (url.includes("instagram.com")) {
+        platformStatus.instagram.url = tab.url;
+        if (!url.includes("/login") && !url.includes("/accounts")) platformStatus.instagram.logged_in = true;
+      }
+      if (url.includes("facebook.com")) {
+        platformStatus.facebook.url = tab.url;
+        if (!url.includes("/login") && !url.includes("/checkpoint")) platformStatus.facebook.logged_in = true;
+      }
+      if (url.includes("youtube.com")) {
+        platformStatus.youtube.url = tab.url;
+        if (!url.includes("/login") && url.includes("youtube.com")) platformStatus.youtube.logged_in = true;
+      }
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          status: tabs.length > 0 ? "connected" : "disconnected",
+          connected_to_external: isConnected,
+          studio_baseline: {
+            port: 9223,
+            platforms: platformStatus,
+          },
+          tabs: tabs.map(t => ({ index: t.index, url: t.url, title: t.title, active: t.active })),
+          total_tabs: tabs.length,
+          timestamp: new Date().toISOString()
+        }, null, 2),
+      }],
+    };
+  }
+);
+
+// Snapshot current page — full or lite
+server.tool(
   "scout_snapshot",
   "Take a snapshot of the current page. Returns accessibility tree (numbered elements). Set lite=true to skip the screenshot (saves ~50K+ tokens). Use full snapshot only when you need to visually see the page.",
   {
@@ -340,24 +405,22 @@ server.tool(
   }
 );
 
-// High-level platform login (opt-in: set SCOUT_LOGIN_ENABLED=true)
-if (process.env.SCOUT_LOGIN_ENABLED === "true") {
-  server.tool(
-    "scout_login",
-    "Log in to a social platform automatically. Handles multi-step flows and unusual activity challenges. Auto-saves the session on success (no need to call scout_save_session). Twitter accepts username; LinkedIn/Instagram/Facebook expect email. Returns {success, url, challenge_type?, error?} — always check success before proceeding.",
-    {
-      platform: z.enum(["twitter", "linkedin", "instagram", "facebook"]).describe("Platform to log in to"),
-      username: z.string().describe("Username (twitter) or email (linkedin, instagram, facebook)"),
-      password: z.string().describe("Password"),
-    },
-    async ({ platform, username, password }) => {
-      const result = await loginTool(platform, username, password);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
-    }
-  );
-}
+// High-level platform login
+server.tool(
+  "scout_login",
+  "Log in to a social platform automatically. Handles multi-step flows and unusual activity challenges. Auto-saves the session on success. Returns {success, url, challenge_type?, error?} — always check success before proceeding.",
+  {
+    platform: z.enum(["twitter", "linkedin", "instagram", "facebook", "youtube"]).describe("Platform to log in to"),
+    username: z.string().describe("Username or email for the platform"),
+    password: z.string().describe("Password"),
+  },
+  async ({ platform, username, password }) => {
+    const result = await loginTool(platform, username, password);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
 
 // Console logs
 server.tool(

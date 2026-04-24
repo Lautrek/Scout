@@ -3,7 +3,9 @@ import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { Browser, Page, BrowserContext } from "playwright";
 import { discoverBrowsers, findBestBrowser } from "./discovery.js";
 
-// Register stealth on Chromium (no-op on Firefox — stealth isn't needed there)
+// Apply browser-fingerprint normalization for launch mode (consistent viewport,
+// WebGL renderer strings, etc.). In connect mode this is a no-op since the user's
+// own browser profile is used as-is.
 chromiumExtra.use(StealthPlugin());
 import fs from "fs";
 import os from "os";
@@ -12,14 +14,15 @@ import path from "path";
 // ── Configuration ──────────────────────────────────────────────────────────
 
 // Mode: "connect" (attach to user's browser), "launch" (start fresh), "auto" (try connect, fallback to launch)
-const MODE = (process.env.SCOUT_MODE ?? "auto").toLowerCase();
-// Explicit CDP/BiDi URL to connect to (overrides discovery)
-const CONNECT_URL = process.env.SCOUT_CONNECT_URL ?? "";
+const MODE = (process.env.SCOUT_MODE ?? "connect").toLowerCase();
+// Standard Studio Port for detached baseline
+const DEFAULT_CDP_URL = "http://localhost:9223";
+const CONNECT_URL = process.env.SCOUT_CONNECT_URL ?? DEFAULT_CDP_URL;
 
 const HEADLESS = process.env.SCOUT_HEADLESS === "true";
 const VIEWPORT_WIDTH = parseInt(process.env.SCOUT_VIEWPORT_WIDTH ?? "1280");
 const VIEWPORT_HEIGHT = parseInt(process.env.SCOUT_VIEWPORT_HEIGHT ?? "800");
-const CDP_PORT = parseInt(process.env.SCOUT_CDP_PORT ?? "9229");
+const CDP_PORT = parseInt(process.env.SCOUT_CDP_PORT ?? "9223");
 const PORT_FILE = path.join(os.homedir(), ".scout-browser.port");
 const MAX_TABS = parseInt(process.env.SCOUT_MAX_TABS ?? "5");
 

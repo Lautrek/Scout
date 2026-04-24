@@ -13,6 +13,7 @@ import {
   ComposeResult,
   PostResult,
 } from "./types.js";
+import { getHumanizer } from "../../../../lib/agent/humanizer.js";
 
 const WAIT = {
   pageLoad: 3000,
@@ -31,7 +32,8 @@ export class XAdapter implements PlatformAdapter {
       return true;
     }
     await page.goto(this.homeUrl, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(WAIT.pageLoad);
+    const human = getHumanizer(page);
+    await human.sleep(1500, 3000);
     const finalUrl = page.url();
     return (
       !finalUrl.includes("/login") &&
@@ -41,14 +43,10 @@ export class XAdapter implements PlatformAdapter {
   }
 
   async getMyPosts(page: Page, limit = 10): Promise<Post[]> {
-    // Navigate to own profile
-    await page.evaluate(() => {
-      const profileLink = document.querySelector(
-        'a[data-testid="AppTabBar_Profile_Link"]'
-      ) as HTMLElement;
-      if (profileLink) profileLink.click();
-    });
-    await page.waitForTimeout(WAIT.pageLoad);
+    const human = getHumanizer(page);
+    // Click profile link naturally
+    await human.click('a[data-testid="AppTabBar_Profile_Link"]');
+    await human.sleep(2000, 4000);
 
     return page.evaluate((max: number) => {
       const posts: any[] = [];
@@ -100,30 +98,24 @@ export class XAdapter implements PlatformAdapter {
 
   async compose(page: Page, text: string): Promise<ComposeResult> {
     try {
-      // Open compose via URL (most reliable, avoids overlay issues)
-      await page.goto("https://x.com/compose/post", {
-        waitUntil: "domcontentloaded",
-      });
-      await page.waitForTimeout(WAIT.editorOpen);
+      const human = getHumanizer(page);
+      
+      // Try to find post button on current page first, otherwise navigate
+      const postBtn = await page.$('a[data-testid="SideNav_NewTweet_Button"]');
+      if (postBtn) {
+        await human.click(postBtn);
+      } else {
+        await page.goto("https://x.com/compose/post", {
+          waitUntil: "domcontentloaded",
+        });
+      }
+      
+      await human.sleep(1000, 2000);
 
       // Find and focus the tweet editor
-      const focused = await page.evaluate(() => {
-        const editor = document.querySelector(
-          '[data-testid="tweetTextarea_0"], div[role="textbox"][data-testid]'
-        ) as HTMLElement;
-        if (!editor) return false;
-        editor.focus();
-        editor.click();
-        return true;
-      });
-
-      if (!focused) {
-        return { success: false, error: "Could not find X compose editor" };
-      }
-
-      await page.waitForTimeout(300);
-      await page.keyboard.type(text, { delay: 8 });
-      await page.waitForTimeout(WAIT.afterType);
+      const editorSelector = '[data-testid="tweetTextarea_0"], div[role="textbox"][data-testid]';
+      await human.type(editorSelector, text);
+      
       return { success: true };
     } catch (e: any) {
       return { success: false, error: e.message };
@@ -132,21 +124,12 @@ export class XAdapter implements PlatformAdapter {
 
   async submitPost(page: Page): Promise<PostResult> {
     try {
-      const result = await page.evaluate(() => {
-        // X uses data-testid="tweetButton" or "tweetButtonInline"
-        const btn =
-          document.querySelector('[data-testid="tweetButton"]') ||
-          document.querySelector('[data-testid="tweetButtonInline"]');
-        if (btn && !(btn as HTMLButtonElement).disabled) {
-          (btn as HTMLElement).click();
-          return { success: true };
-        }
-        return { success: false, error: "Tweet button not found or disabled" };
-      });
-
-      if (!result.success) return result as PostResult;
-
-      await page.waitForTimeout(WAIT.afterPost);
+      const human = getHumanizer(page);
+      const btnSelector = '[data-testid="tweetButton"], [data-testid="tweetButtonInline"]';
+      
+      await human.click(btnSelector);
+      await human.sleep(2000, 4000);
+      
       return { success: true, url: page.url() };
     } catch (e: any) {
       return { success: false, error: e.message };

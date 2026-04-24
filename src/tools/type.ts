@@ -2,6 +2,7 @@ import { engine } from "../browser/engine.js";
 import { getElement } from "../browser/a11y.js";
 import { healerWrap } from "../browser/healer.js";
 import { HealerResult } from "../types.js";
+import { getHumanizer } from "../../../../lib/agent/humanizer.js";
 
 export async function typeTool(
   id: number,
@@ -16,28 +17,35 @@ export async function typeTool(
   }
 
   const page = await engine.getPage();
+  const human = getHumanizer(page);
 
   return healerWrap(page, async () => {
-    // Try clicking by data-scout-id first; fall back to Tab-focus trick if React cleared attributes
+    // Try organic click/focus first
     const locator = page.locator(`[data-scout-id="${id}"]`).first();
     let clicked = false;
     try {
-      await locator.click({ timeout: 5000 });
+      const handle = await locator.elementHandle();
+      if (handle) {
+        await human.click(handle);
+      } else {
+        await locator.click({ timeout: 5000 });
+      }
       clicked = true;
     } catch {
       // React may have cleared data-scout-id during a re-render; nudge focus to nearest input
       await page.keyboard.press("Tab");
-      await page.waitForTimeout(100);
+      await human.sleep(50, 150);
       await page.keyboard.press("Shift+Tab");
-      await page.waitForTimeout(100);
+      await human.sleep(50, 150);
     }
 
     if (clear) {
       await page.keyboard.press("Control+a");
+      await human.sleep(100, 300);
     }
 
-    // page.keyboard.type fires real key events (works with React synthetic inputs)
-    await page.keyboard.type(text, { delay: 15 });
+    // Use organic typing
+    await human.type(`[data-scout-id="${id}"]`, text);
 
     // Verify text landed in the active element
     const landed = await page.evaluate((expected: string) => {
