@@ -2,6 +2,7 @@ import { chromium as chromiumExtra, firefox as firefoxExtra } from "playwright-e
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { Browser, Page, BrowserContext } from "playwright";
 import { discoverBrowsers, findBestBrowser } from "./discovery.js";
+import { isContextClosedError, runSelfHeal, withSelfHeal } from "./recovery.js";
 
 // Apply browser-fingerprint normalization for launch mode (consistent viewport,
 // WebGL renderer strings, etc.). In connect mode this is a no-op since the user's
@@ -14,10 +15,11 @@ import path from "path";
 // ── Configuration ──────────────────────────────────────────────────────────
 
 // Mode: "connect" (attach to user's browser), "launch" (start fresh), "auto" (try connect, fallback to launch)
-const MODE = (process.env.SCOUT_MODE ?? "connect").toLowerCase();
-// Standard Studio Port for detached baseline
-const DEFAULT_CDP_URL = "http://localhost:9223";
-const CONNECT_URL = process.env.SCOUT_CONNECT_URL ?? DEFAULT_CDP_URL;
+const MODE = (process.env.SCOUT_MODE ?? "auto").toLowerCase();
+// Explicit override URL — only set if the env var is actually present
+const CONNECT_URL_EXPLICIT = process.env.SCOUT_CONNECT_URL;
+const DEFAULT_CDP_URL = "http://localhost:9222";
+const CONNECT_URL = CONNECT_URL_EXPLICIT ?? DEFAULT_CDP_URL;
 
 const HEADLESS = process.env.SCOUT_HEADLESS === "true";
 const VIEWPORT_WIDTH = parseInt(process.env.SCOUT_VIEWPORT_WIDTH ?? "1280");
@@ -30,6 +32,39 @@ const BROWSER_TYPE = (process.env.SCOUT_BROWSER ?? "chromium").toLowerCase();
 const PROFILE_DIR = process.env.SCOUT_PROFILE_DIR ?? "";
 const EXECUTABLE_PATH = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 
+interface NetworkEntry {
+  id: string;
+  t: number;            // request start (ms epoch)
+  method: string;
+  url: string;
+  resourceType: string;
+  postData?: string;    // truncated request body
+  request_headers?: Record<string, string>;
+  status?: number;
+  statusText?: string;
+  contentType?: string;
+  response_headers?: Record<string, string>;
+  fromCache?: boolean;
+  failure?: string;
+  duration_ms?: number;
+  page_url?: string;
+}
+
+/**
+ * Cookie + auth values are noisy and partially sensitive — strip them by default
+ * unless the caller explicitly opts in via include_sensitive=true.
+ */
+const SENSITIVE_HEADER_KEYS = new Set([
+  "cookie",
+  "set-cookie",
+  "authorization",
+  "x-csrf-token",
+  "x-client-transaction-id",
+]);
+
+const NET_BUFFER_MAX = parseInt(process.env.SCOUT_NETWORK_BUFFER ?? "500");
+const NET_POSTDATA_TRUNCATE = 500;
+
 class BrowserEngine {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
@@ -38,6 +73,8 @@ class BrowserEngine {
   private _connected = false; // true when attached to user's browser
   private logs: string[] = [];
   private blockedResources: string[] = [];
+  private network: NetworkEntry[] = [];
+  private _netSeq = 0;
 
   /** Get collected console logs. */
   getLogs(): string[] {
@@ -47,6 +84,74 @@ class BrowserEngine {
   /** Clear collected console logs. */
   clearLogs(): void {
     this.logs = [];
+  }
+
+  // ── Network log API ─────────────────────────────────────────────────────
+
+  getNetworkLogs(opts: {
+    sinceMs?: number;
+    urlIncludes?: string;
+    method?: string;
+    statusMin?: number;
+    statusMax?: number;
+    limit?: number;
+    includeHeaders?: boolean;
+    includeSensitive?: boolean;
+  } = {}): NetworkEntry[] {
+    let out = this.network;
+    if (opts.sinceMs !== undefined) {
+      const min = opts.sinceMs;
+      out = out.filter((e) => e.t >= min);
+    }
+    if (opts.urlIncludes) {
+      const needle = opts.urlIncludes.toLowerCase();
+      out = out.filter((e) => e.url.toLowerCase().includes(needle));
+    }
+    if (opts.method) {
+      const m = opts.method.toUpperCase();
+      out = out.filter((e) => e.method === m);
+    }
+    if (opts.statusMin !== undefined) {
+      const s = opts.statusMin;
+      out = out.filter((e) => (e.status ?? 0) >= s);
+    }
+    if (opts.statusMax !== undefined) {
+      const s = opts.statusMax;
+      out = out.filter((e) => (e.status ?? 0) <= s);
+    }
+    const limit = opts.limit ?? 100;
+    const sliced = out.slice(-limit);
+
+    if (!opts.includeHeaders) {
+      // Strip headers entirely to keep responses small by default
+      return sliced.map((e) => ({
+        ...e,
+        request_headers: undefined,
+        response_headers: undefined,
+      }));
+    }
+    if (opts.includeSensitive) {
+      return sliced;
+    }
+    // Headers requested but redact sensitive keys
+    const redact = (h?: Record<string, string>) => {
+      if (!h) return h;
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(h)) {
+        out[k] = SENSITIVE_HEADER_KEYS.has(k.toLowerCase()) ? "<redacted>" : v;
+      }
+      return out;
+    };
+    return sliced.map((e) => ({
+      ...e,
+      request_headers: redact(e.request_headers),
+      response_headers: redact(e.response_headers),
+    }));
+  }
+
+  clearNetworkLogs(): void {
+    this.network = [];
+    this._netSeq = 0;
   }
 
   /** Whether we're connected to an external browser (not one we launched). */
@@ -77,30 +182,75 @@ class BrowserEngine {
     return this.context!;
   }
 
+  /**
+   * Flush the cached browser/context refs so the next call rebuilds them.
+   * Used by withSelfHeal after a heal action runs — we need _ensureBrowser
+   * to actually re-attach to the (newly relaunched) chrome.
+   */
+  private _invalidateConnection(): void {
+    this.browser = null;
+    this.context = null;
+    this._activePage = null;
+    this._connected = false;
+  }
+
+  /**
+   * Wrap an operation so a "browser/context closed" error triggers
+   * a one-shot self-heal (relaunch studio_baseline.sh) and a retry.
+   * Disabled when SCOUT_SELF_HEAL=false.
+   */
+  private async _withRecovery<T>(op: () => Promise<T>): Promise<T> {
+    if (process.env.SCOUT_SELF_HEAL === "false") {
+      return op();
+    }
+    return withSelfHeal(op, {
+      onTrip: (err) => {
+        console.error(
+          `Scout: detected dead browser (${(err as Error)?.message?.slice(0, 80) ?? err}); attempting self-heal`
+        );
+      },
+      heal: async () => {
+        const r = await runSelfHeal();
+        const ok = r.status === 0;
+        console.error(
+          `Scout: self-heal ${ok ? "succeeded" : "failed"} in ${r.duration_ms}ms`
+        );
+        return ok;
+      },
+      beforeRetry: () => {
+        this._invalidateConnection();
+      },
+    });
+  }
+
   /** Returns the active page. */
   async getPage(): Promise<Page> {
-    await this._ensureBrowser();
+    return this._withRecovery(async () => {
+      await this._ensureBrowser();
 
-    // Reuse active page if still alive
-    if (this._activePage && !this._activePage.isClosed()) {
+      // Reuse active page if still alive
+      if (this._activePage && !this._activePage.isClosed()) {
+        return this._activePage;
+      }
+
+      // Try to reuse first open page from existing context
+      const pages = this.context!.pages();
+      if (pages.length > 0) {
+        this._activePage = pages[pages.length - 1];
+        return this._activePage;
+      }
+
+      this._activePage = await this.context!.newPage();
       return this._activePage;
-    }
-
-    // Try to reuse first open page from existing context
-    const pages = this.context!.pages();
-    if (pages.length > 0) {
-      this._activePage = pages[pages.length - 1];
-      return this._activePage;
-    }
-
-    this._activePage = await this.context!.newPage();
-    return this._activePage;
+    });
   }
 
   /** All open pages (tabs) in the current context. */
   async getPages(): Promise<Page[]> {
-    await this._ensureBrowser();
-    return this.context!.pages();
+    return this._withRecovery(async () => {
+      await this._ensureBrowser();
+      return this.context!.pages();
+    });
   }
 
   /** Switch active page to a specific index or URL match. */
@@ -186,8 +336,10 @@ class BrowserEngine {
     if (!this._persistent && this.browser?.isConnected() && this.context && !storageStatePath) return;
 
     // ── Connect mode: attach to user's existing browser ──────────────
-    if (MODE === "connect" || CONNECT_URL) {
-      await this._connectToExisting(CONNECT_URL || undefined);
+    // CONNECT_URL_EXPLICIT check: if user explicitly set SCOUT_CONNECT_URL,
+    // honour it even in auto mode rather than running discovery.
+    if (MODE === "connect" || CONNECT_URL_EXPLICIT) {
+      await this._connectToExisting(CONNECT_URL);
       return;
     }
 
@@ -399,6 +551,67 @@ class BrowserEngine {
       this.logs.push(`[error] ${err.message}`);
       if (this.logs.length > 100) this.logs.shift();
     });
+
+    // Network capture — survives in-page script overrides because Playwright
+    // wires this through CDP Network domain at the browser layer.
+    page.on("request", (req) => {
+      const id = `req${++this._netSeq}`;
+      let postData: string | undefined;
+      try {
+        const raw = req.postData();
+        if (raw) postData = raw.slice(0, NET_POSTDATA_TRUNCATE);
+      } catch {}
+      let request_headers: Record<string, string> | undefined;
+      try {
+        request_headers = req.headers();
+      } catch {}
+      const entry: NetworkEntry = {
+        id,
+        t: Date.now(),
+        method: req.method(),
+        url: req.url(),
+        resourceType: req.resourceType(),
+        postData,
+        request_headers,
+        page_url: page.url(),
+      };
+      (req as any).__scoutNetId = id;
+      this._pushNetEntry(entry);
+    });
+    page.on("response", async (res) => {
+      const req = res.request();
+      const id = (req as any).__scoutNetId as string | undefined;
+      if (!id) return;
+      const entry = this.network.find((e) => e.id === id);
+      if (!entry) return;
+      entry.status = res.status();
+      entry.statusText = res.statusText();
+      try {
+        entry.fromCache = res.fromServiceWorker() ? false : (res as any).fromCache?.() ?? false;
+      } catch {}
+      try {
+        const headers = res.headers();
+        entry.response_headers = headers;
+        const ct = headers["content-type"];
+        if (ct) entry.contentType = ct;
+      } catch {}
+      entry.duration_ms = Date.now() - entry.t;
+    });
+    page.on("requestfailed", (req) => {
+      const id = (req as any).__scoutNetId as string | undefined;
+      if (!id) return;
+      const entry = this.network.find((e) => e.id === id);
+      if (!entry) return;
+      entry.failure = req.failure()?.errorText ?? "unknown";
+      entry.duration_ms = Date.now() - entry.t;
+    });
+  }
+
+  private _pushNetEntry(e: NetworkEntry): void {
+    this.network.push(e);
+    if (this.network.length > NET_BUFFER_MAX) {
+      this.network.splice(0, this.network.length - NET_BUFFER_MAX);
+    }
   }
 
   private _readPortFile(): number | null {

@@ -1,6 +1,21 @@
+/**
+ * LCP — Lautrek Cockpit Protocol HTTP server.
+ *
+ * Hosted by the Scout daemon. Used by:
+ *   - mcp_proxy.ts (per-TUI thin shim)        → POST /lcp/tools/call, GET /lcp/tools
+ *   - EchoBench (Python)                       → POST /lcp/dispatch (legacy operations)
+ *   - any other client speaking HTTP
+ *
+ * Port discovery: writes the bound port to ~/.scout/lcp.port on listen, so
+ * downstream clients can find the daemon without hardcoding.
+ */
+
 import express from "express";
 import cors from "cors";
 import { Server } from "http";
+import { promises as fs, writeFileSync, mkdirSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import { navigateTool } from "./tools/navigate.js";
 import { snapshotTool } from "./tools/snapshot.js";
 import { clickTool } from "./tools/click.js";
@@ -12,19 +27,26 @@ import { pressKeyTool } from "./tools/press_key.js";
 import { hoverTool } from "./tools/hover.js";
 import { newTabTool, switchTabTool } from "./tools/tabs.js";
 import { engine } from "./browser/engine.js";
+import {
+  pickRecentFailures,
+  summarizeFailures,
+} from "./browser/recent_failures.js";
+import { TOOLS, TOOL_BY_NAME, zodShapeToJsonSchema } from "./tool_registry.js";
+import { z } from "zod";
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 
 const startTime = Date.now();
 const LCP_SECRET = process.env.SCOUT_LCP_SECRET ?? "";
 
-// Authentication middleware — if SCOUT_LCP_SECRET is set, require it on all POST routes
+// Auth middleware — only enforced when SCOUT_LCP_SECRET is set
 function requireSecret(req: express.Request, res: express.Response, next: express.NextFunction): void {
-  if (!LCP_SECRET) return next(); // no secret configured — local-only use
-  const auth = req.headers["x-scout-secret"] as string
-    ?? (req.headers.authorization?.replace("Bearer ", "") || "");
+  if (!LCP_SECRET) return next();
+  const auth =
+    (req.headers["x-scout-secret"] as string) ??
+    (req.headers.authorization?.replace("Bearer ", "") || "");
   if (auth !== LCP_SECRET) {
     res.status(401).json({ error: "Unauthorized — set X-Scout-Secret header" });
     return;
@@ -32,29 +54,74 @@ function requireSecret(req: express.Request, res: express.Response, next: expres
   next();
 }
 
-// Apply auth to all mutation endpoints
 app.use("/lcp/dispatch", requireSecret);
 app.use("/lcp/forge", requireSecret);
+app.use("/lcp/tools/call", requireSecret);
 
-// 1. State Inspection
+// ─── 1. Health ────────────────────────────────────────────────────────────
 app.get("/lcp/health", (req, res) => {
   res.json({
     status: "ok",
     service: "scout",
-    uptime: (Date.now() - startTime) / 1000,
+    uptime_s: (Date.now() - startTime) / 1000,
+    tool_count: TOOLS.length,
   });
 });
 
-// 2. Action Port
+// ─── 2. MCP-style tool discovery + invocation (parallel cockpit) ──────────
+app.get("/lcp/tools", (req, res) => {
+  res.json({
+    tools: TOOLS.map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: zodShapeToJsonSchema(t.schema),
+    })),
+  });
+});
+
+app.post("/lcp/tools/call", async (req, res) => {
+  const { name, arguments: args } = req.body ?? {};
+  const tool = TOOL_BY_NAME.get(name);
+  if (!tool) {
+    return res.status(404).json({ error: `Unknown tool: ${name}` });
+  }
+  try {
+    // Validate via the tool's zod shape
+    const parsed = z.object(tool.schema).parse(args ?? {});
+    const result = await tool.handler(parsed);
+    res.json(result);
+  } catch (err: any) {
+    console.error(`LCP tool call error [${name}]:`, err);
+    // Auto-attach recent network failures so callers see 4xx/5xx /
+    // request-failed entries that may explain the tool error. Skip when
+    // the user has explicitly opted out (SCOUT_AUTOPULL_FAILURES=false).
+    let recent_failures: any[] | undefined;
+    if (process.env.SCOUT_AUTOPULL_FAILURES !== "false") {
+      try {
+        const all = engine.getNetworkLogs({ limit: 500 });
+        const picked = pickRecentFailures(all);
+        if (picked.length > 0) recent_failures = summarizeFailures(picked);
+      } catch {
+        // Don't let diagnostic gathering shadow the original error
+      }
+    }
+    res.status(500).json({
+      error: err.message ?? String(err),
+      ...(recent_failures && recent_failures.length > 0
+        ? { recent_failures }
+        : {}),
+    });
+  }
+});
+
+// ─── 3. Legacy operation dispatcher (EchoBench compatibility) ─────────────
 app.post("/lcp/dispatch", async (req, res) => {
   const { tool, operation, params } = req.body;
-
   if (tool !== "scout") {
     return res.status(404).json({ error: `Tool ${tool} not supported by Scout LCP` });
   }
-
   try {
-    let result;
+    let result: any;
     switch (operation) {
       case "navigate":
         await engine.setBlockedResources(["image", "media", "font"]);
@@ -159,38 +226,70 @@ app.post("/lcp/dispatch", async (req, res) => {
   }
 });
 
-// 3. Thought Stream (SSE)
+// ─── 4. Thought Stream (SSE) ──────────────────────────────────────────────
 app.get("/lcp/stream", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
-
-  const send = (data: any) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
-
+  const send = (data: any) => res.write(`data: ${JSON.stringify(data)}\n\n`);
   const interval = setInterval(() => {
-    send({
-      event: "thought",
-      module: "scout",
-      payload: { status: "idle", timestamp: Date.now() / 1000 },
-    });
+    send({ event: "thought", module: "scout", payload: { status: "idle", timestamp: Date.now() / 1000 } });
   }, 5000);
-
-  req.on("close", () => {
-    clearInterval(interval);
-  });
+  req.on("close", () => clearInterval(interval));
 });
 
-// 4. Shutdown (graceful — requires auth if SCOUT_LCP_SECRET is set)
+// ─── 5. Shutdown ──────────────────────────────────────────────────────────
 app.post("/lcp/shutdown", requireSecret, (req, res) => {
   res.json({ status: "shutting_down" });
   setTimeout(() => process.exit(0), 500);
 });
 
+// ─── Port discovery ───────────────────────────────────────────────────────
+const PORT_FILE = join(homedir(), ".scout", "lcp.port");
+
+function writePortFile(port: number): void {
+  try {
+    mkdirSync(join(homedir(), ".scout"), { recursive: true });
+    writeFileSync(PORT_FILE, String(port), "utf8");
+  } catch (err) {
+    console.error(`Failed to write ${PORT_FILE}:`, err);
+  }
+}
+
 export function startLcpServer(port: number): Server {
+  // port=0 → OS picks a free port (parallel cockpit, backward compat)
+  // port>0 → fixed port; EADDRINUSE means another daemon is running — fail fast
   const server = app.listen(port, () => {
-    console.error(`Scout LCP server running on port ${port}`);
+    const address = server.address();
+    const actualPort =
+      typeof address === "object" && address ? address.port : port;
+    writePortFile(actualPort);
+    console.error(`Scout LCP server running on port ${actualPort} (written to ${PORT_FILE})`);
   });
+
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE" && port > 0) {
+      console.error(
+        `Scout: port ${port} is already in use. Another Scout daemon is almost certainly already running. Stop it first: scripts/scout_baseline.sh --stop`
+      );
+      process.exit(2);
+    }
+    throw err;
+  });
+
+  // Clean up port file on shutdown
+  const cleanup = async () => {
+    try {
+      await fs.unlink(PORT_FILE);
+    } catch {}
+  };
+  process.on("exit", () => {
+    try {
+      require("fs").unlinkSync(PORT_FILE);
+    } catch {}
+  });
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+
   return server;
 }
