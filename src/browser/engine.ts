@@ -32,6 +32,35 @@ const BROWSER_TYPE = (process.env.SCOUT_BROWSER ?? "chromium").toLowerCase();
 const PROFILE_DIR = process.env.SCOUT_PROFILE_DIR ?? "";
 const EXECUTABLE_PATH = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 
+// ── WebSocket pub-sub types ────────────────────────────────────────────────
+
+export type ConditionKind = "console_pattern" | "network_url" | "js_eval" | "page_nav";
+
+export interface Condition {
+  id: string;
+  kind: ConditionKind;
+  pattern?: string;   // regex string for console_pattern / network_url / page_nav
+  expr?: string;      // JS expression for js_eval (evaluated in browser, truthy = fire)
+  poll_ms?: number;   // js_eval poll interval (default 200)
+  once?: boolean;     // remove condition after first fire (default true)
+}
+
+export interface EventPayload {
+  type: "event";
+  condition_id: string;
+  elapsed_s: number;
+  timestamp_ms: number;
+  value: string;
+}
+
+interface SubscriptionState {
+  startMs: number;
+  conditions: Condition[];
+  callback: (evt: EventPayload) => void;
+  _pollTimers: Map<string, ReturnType<typeof setInterval>>;
+  _firedOnce: Set<string>;
+}
+
 interface NetworkEntry {
   id: string;
   t: number;            // request start (ms epoch)
@@ -75,6 +104,7 @@ class BrowserEngine {
   private blockedResources: string[] = [];
   private network: NetworkEntry[] = [];
   private _netSeq = 0;
+  private _subscribers: Map<string, SubscriptionState> = new Map();
 
   /** Get collected console logs. */
   getLogs(): string[] {
@@ -471,7 +501,7 @@ class BrowserEngine {
   private async _launchPersistent(): Promise<void> {
     const browserType = BROWSER_TYPE === "firefox" ? firefoxExtra : chromiumExtra;
     const args = BROWSER_TYPE !== "firefox"
-      ? ["--no-sandbox", "--disable-dev-shm-usage"]
+      ? ["--no-sandbox", "--disable-dev-shm-usage", "--ignore-certificate-errors"]
       : [];
 
     this.context = await browserType.launchPersistentContext(PROFILE_DIR, {
@@ -502,7 +532,7 @@ class BrowserEngine {
   private async _launchFresh(storageStatePath?: string): Promise<void> {
     const browserType = BROWSER_TYPE === "firefox" ? firefoxExtra : chromiumExtra;
     const args = BROWSER_TYPE !== "firefox"
-      ? ["--no-sandbox", "--disable-dev-shm-usage", `--remote-debugging-port=${CDP_PORT}`]
+      ? ["--no-sandbox", "--disable-dev-shm-usage", "--ignore-certificate-errors", `--remote-debugging-port=${CDP_PORT}`]
       : [];
 
     this.browser = await browserType.launch({
@@ -546,10 +576,18 @@ class BrowserEngine {
       const entry = `[${msg.type()}] ${msg.text()}`;
       this.logs.push(entry);
       if (this.logs.length > 100) this.logs.shift();
+      this._dispatchConsole(entry);
     });
     page.on("pageerror", (err) => {
-      this.logs.push(`[error] ${err.message}`);
+      const entry = `[error] ${err.message}`;
+      this.logs.push(entry);
       if (this.logs.length > 100) this.logs.shift();
+      this._dispatchConsole(entry);
+    });
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) {
+        this._dispatchPageNav(frame.url());
+      }
     });
 
     // Network capture — survives in-page script overrides because Playwright
@@ -611,6 +649,90 @@ class BrowserEngine {
     this.network.push(e);
     if (this.network.length > NET_BUFFER_MAX) {
       this.network.splice(0, this.network.length - NET_BUFFER_MAX);
+    }
+    this._dispatchNetwork(e.url);
+  }
+
+  // ── Pub-sub API ────────────────────────────────────────────────────────────
+
+  subscribe(id: string, conditions: Condition[], callback: (evt: EventPayload) => void): void {
+    const state: SubscriptionState = {
+      startMs: Date.now(),
+      conditions,
+      callback,
+      _pollTimers: new Map(),
+      _firedOnce: new Set(),
+    };
+    this._subscribers.set(id, state);
+    this._startJsEvalPolls(id, state);
+  }
+
+  unsubscribe(id: string): void {
+    const state = this._subscribers.get(id);
+    if (!state) return;
+    for (const timer of state._pollTimers.values()) clearInterval(timer);
+    this._subscribers.delete(id);
+  }
+
+  private _fire(subId: string, state: SubscriptionState, cond: Condition, value: string): void {
+    if (cond.once !== false && state._firedOnce.has(cond.id)) return;
+    if (cond.once !== false) state._firedOnce.add(cond.id);
+    const elapsed_s = (Date.now() - state.startMs) / 1000;
+    state.callback({ type: "event", condition_id: cond.id, elapsed_s, timestamp_ms: Date.now(), value });
+    // Remove fired once-conditions; clean up poll timer if js_eval
+    if (cond.once !== false) {
+      state.conditions = state.conditions.filter((c) => c.id !== cond.id);
+      const timer = state._pollTimers.get(cond.id);
+      if (timer) { clearInterval(timer); state._pollTimers.delete(cond.id); }
+    }
+  }
+
+  private _dispatchConsole(entry: string): void {
+    for (const [subId, state] of this._subscribers) {
+      for (const cond of state.conditions) {
+        if (cond.kind !== "console_pattern" || !cond.pattern) continue;
+        try {
+          if (new RegExp(cond.pattern).test(entry)) this._fire(subId, state, cond, entry);
+        } catch {}
+      }
+    }
+  }
+
+  private _dispatchNetwork(url: string): void {
+    for (const [subId, state] of this._subscribers) {
+      for (const cond of state.conditions) {
+        if (cond.kind !== "network_url" || !cond.pattern) continue;
+        try {
+          if (new RegExp(cond.pattern).test(url)) this._fire(subId, state, cond, url);
+        } catch {}
+      }
+    }
+  }
+
+  private _dispatchPageNav(url: string): void {
+    for (const [subId, state] of this._subscribers) {
+      for (const cond of state.conditions) {
+        if (cond.kind !== "page_nav") continue;
+        const pat = cond.pattern;
+        if (!pat || new RegExp(pat).test(url)) this._fire(subId, state, cond, url);
+      }
+    }
+  }
+
+  private _startJsEvalPolls(subId: string, state: SubscriptionState): void {
+    for (const cond of state.conditions) {
+      if (cond.kind !== "js_eval" || !cond.expr) continue;
+      const poll_ms = cond.poll_ms ?? 200;
+      const expr = cond.expr;
+      const timer = setInterval(async () => {
+        if (!this._subscribers.has(subId)) { clearInterval(timer); return; }
+        try {
+          const page = await this.getPage();
+          const result = await page.evaluate(expr);
+          if (result) this._fire(subId, state, cond, String(result));
+        } catch {}
+      }, poll_ms);
+      state._pollTimers.set(cond.id, timer);
     }
   }
 

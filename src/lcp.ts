@@ -13,6 +13,7 @@
 import express from "express";
 import cors from "cors";
 import { Server } from "http";
+import { WebSocketServer, WebSocket } from "ws";
 import { promises as fs, writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -26,7 +27,7 @@ import { waitTool } from "./tools/wait.js";
 import { pressKeyTool } from "./tools/press_key.js";
 import { hoverTool } from "./tools/hover.js";
 import { newTabTool, switchTabTool } from "./tools/tabs.js";
-import { engine } from "./browser/engine.js";
+import { engine, Condition } from "./browser/engine.js";
 import {
   pickRecentFailures,
   summarizeFailures,
@@ -275,6 +276,42 @@ export function startLcpServer(port: number): Server {
       process.exit(2);
     }
     throw err;
+  });
+
+  // ── WebSocket pub-sub (same port, path /lcp/events) ─────────────────────
+  const wss = new WebSocketServer({ server, path: "/lcp/events" });
+  let _wsSeq = 0;
+
+  wss.on("connection", (ws: WebSocket) => {
+    const connId = `ws_${++_wsSeq}`;
+    const activeSubIds = new Set<string>();
+
+    ws.on("message", (raw) => {
+      let msg: any;
+      try { msg = JSON.parse(raw.toString()); } catch { return; }
+
+      if (msg.type === "subscribe") {
+        const conditions: Condition[] = Array.isArray(msg.conditions) ? msg.conditions : [];
+        const subId = msg.session_id ? `${msg.session_id}_${connId}` : connId;
+        activeSubIds.add(subId);
+        engine.subscribe(subId, conditions, (evt) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(evt));
+          }
+        });
+        ws.send(JSON.stringify({ type: "subscribed", sub_id: subId, conditions: conditions.map((c) => c.id) }));
+      } else if (msg.type === "unsubscribe") {
+        const subId = msg.session_id ? `${msg.session_id}_${connId}` : connId;
+        engine.unsubscribe(subId);
+        activeSubIds.delete(subId);
+        ws.send(JSON.stringify({ type: "unsubscribed", sub_id: subId }));
+      }
+    });
+
+    ws.on("close", () => {
+      for (const subId of activeSubIds) engine.unsubscribe(subId);
+      activeSubIds.clear();
+    });
   });
 
   // Clean up port file on shutdown

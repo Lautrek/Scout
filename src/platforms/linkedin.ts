@@ -13,7 +13,7 @@ import {
   ComposeResult,
   PostResult,
 } from "./types.js";
-import { getHumanizer } from "../../../../lib/agent/humanizer.js";
+import { getHumanizer } from "../../shared_lib/agent/humanizer.js";
 
 /** Time to wait for various UI transitions (ms) */
 const WAIT = {

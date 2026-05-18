@@ -2,7 +2,7 @@ import { engine } from "../browser/engine.js";
 import { getElement } from "../browser/a11y.js";
 import { healerWrap } from "../browser/healer.js";
 import { HealerResult } from "../types.js";
-import { getHumanizer } from "../../../../lib/agent/humanizer.js";
+import { getHumanizer } from "../../shared_lib/agent/humanizer.js";
 
 export async function typeTool(
   id: number,

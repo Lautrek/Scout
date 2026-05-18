@@ -32,4 +32,7 @@ export interface HealerResult {
   stateChange: StateChange;
   before: HealerState;
   after: HealerState;
+  recovered: boolean;
+  retries: number;
+  heal_actions: string[];
 }
