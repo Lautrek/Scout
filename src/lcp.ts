@@ -129,7 +129,7 @@ app.post("/lcp/dispatch", async (req, res) => {
         result = await navigateTool(params.url);
         break;
       case "snapshot":
-        result = await snapshotTool();
+        result = await snapshotTool(params?.lite);
         break;
       case "click":
         result = await clickTool(params.id);
@@ -194,6 +194,11 @@ app.post("/lcp/dispatch", async (req, res) => {
       case "url": {
         const page = await engine.getPage();
         result = { url: page.url() };
+        break;
+      }
+      case "get_cookies": {
+        const page = await engine.getPage();
+        result = await page.context().cookies();
         break;
       }
       case "wait_for_selector": {

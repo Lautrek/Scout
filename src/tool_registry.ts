@@ -48,7 +48,7 @@ export interface ToolDef {
 }
 
 const text = (obj: any): McpContent[] => [
-  { type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) },
+  { type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj ?? null, null, 2) },
 ];
 
 export const TOOLS: ToolDef[] = [
@@ -398,28 +398,47 @@ export const TOOLS: ToolDef[] = [
       await loadSession(name);
       return { content: text(`Session ${name} loaded`) };
     },
-  },
-  {
-    name: "scout_list_sessions",
-    description: "List all saved browser sessions.",
-    schema: {},
-    handler: async () => ({ content: text(await listSessions()) }),
-  },
-  {
-    name: "scout_login",
-    description:
-      "Log in to a social platform automatically. Handles multi-step flows and unusual activity challenges. Auto-saves the session on success. Returns {success, url, challenge_type?, error?} — always check success before proceeding.",
-    schema: {
-      platform: z
-        .enum(["twitter", "linkedin", "instagram", "facebook", "youtube"])
-        .describe("Platform to log in to"),
-      username: z.string().describe("Username or email for the platform"),
-      password: z.string().describe("Password"),
     },
-    handler: async ({ platform, username, password }) => ({
-      content: text(await loginTool(platform, username, password)),
-    }),
-  },
+    {
+      name: "scout_get_cookies",
+      description: "Get all cookies for the current browser context. Includes HttpOnly cookies.",
+      schema: {},
+      handler: async () => {
+        const page = await engine.getPage();
+        const cookies = await page.context().cookies();
+        return { content: text(cookies) };
+      },
+    },
+    {
+      name: "scout_list_sessions",
+      description: "List all saved browser sessions.",
+      schema: {},
+      handler: async () => ({ content: text(await listSessions()) }),
+    },
+    {
+      name: "scout_network_clear",
+      description: "Clear the in-memory network log buffer. Returns the new now_ms timestamp so you can pass it as since_ms to bound a future query.",
+      schema: {},
+      handler: async () => {
+        engine.clearNetworkLogs();
+        return { content: text({ cleared: true, now_ms: Date.now() }) };
+      },
+    },
+    {
+      name: "scout_login",
+      description:
+        "Log in to a social platform automatically. Handles multi-step flows and unusual activity challenges. Auto-saves the session on success. Returns {success, url, challenge_type?, error?} — always check success before proceeding.",
+      schema: {
+        platform: z
+          .enum(["twitter", "linkedin", "instagram", "facebook", "youtube"])
+          .describe("Platform to log in to"),
+        username: z.string().describe("Username or email for the platform"),
+        password: z.string().describe("Password"),
+      },
+      handler: async ({ platform, username, password }) => ({
+        content: text(await loginTool(platform, username, password)),
+      }),
+    },
   {
     name: "scout_network_logs",
     description:
@@ -449,15 +468,6 @@ export const TOOLS: ToolDef[] = [
         }),
       }),
     }),
-  },
-  {
-    name: "scout_network_clear",
-    description: "Clear the in-memory network log buffer. Returns the new now_ms timestamp so you can pass it as since_ms to bound a future query.",
-    schema: {},
-    handler: async () => {
-      engine.clearNetworkLogs();
-      return { content: text({ cleared: true, now_ms: Date.now() }) };
-    },
   },
   {
     name: "scout_console_logs",

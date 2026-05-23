@@ -509,6 +509,7 @@ class BrowserEngine {
       args,
       viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
       executablePath: BROWSER_TYPE === "chromium" ? EXECUTABLE_PATH : undefined,
+      ignoreHTTPSErrors: true,
     });
 
     this._persistent = true;
@@ -544,6 +545,7 @@ class BrowserEngine {
     this.context = await this.browser.newContext({
       viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
       storageState: storageStatePath,
+      ignoreHTTPSErrors: true,
     });
     this.context.on("page", (p) => this._setupPage(p));
 
