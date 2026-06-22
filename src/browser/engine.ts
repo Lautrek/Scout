@@ -306,7 +306,7 @@ class BrowserEngine {
   }
 
   /** Open a new tab and make it active. */
-  async newPage(): Promise<Page> {
+  async newPage(url?: string): Promise<Page> {
     console.error("Scout: creating new page");
     await this._ensureBrowser();
     if (!this.context) {
@@ -324,6 +324,12 @@ class BrowserEngine {
 
     this._activePage = await this.context!.newPage();
     console.error(`Scout: new page created, total pages: ${this.context!.pages().length}`);
+
+    if (url) {
+      console.error(`Scout: navigating to ${url}`);
+      await this._activePage.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    }
+
     return this._activePage;
   }
 

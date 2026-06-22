@@ -1,28 +1,21 @@
-FROM node:20-slim
-
-# Install system Chromium and dependencies
-RUN apt-get update && apt-get install -y \
-    chromium \
-    chromium-sandbox \
-    fonts-noto-color-emoji \
-    --no-install-recommends && \
-    rm -rf /var/lib/apt/lists/*
+# Production image
+FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json ./
+# Copy shared library
+COPY lib /app/lib
+# Copy scout service
+COPY services/scout /app/services/scout
 
-# Install dependencies
+WORKDIR /app/services/scout
 RUN npm install
 
-# Copy source
-COPY tsconfig.json ./
-COPY src/ ./src/
-
-# Use system Chromium
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV SCOUT_HEADLESS=true
+ENV SCOUT_MODE=connect
+ENV SCOUT_CONNECT_URL=http://chromium:9222
+
+EXPOSE 8091
 
 CMD ["npx", "tsx", "src/index.ts"]

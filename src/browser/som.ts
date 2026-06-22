@@ -1,5 +1,4 @@
 import { Page, CDPSession } from "playwright";
-import sharp from "sharp";
 import { ScoutElement } from "../types.js";
 
 export async function captureWithBadges(
@@ -11,12 +10,7 @@ export async function captureWithBadges(
     const client: CDPSession = await page.context().newCDPSession(page);
     try {
       await injectBadges(page, elements, client);
-      const screenshotBuffer = await page.screenshot({ type: "jpeg", quality: 50 });
-      const compressed = await sharp(screenshotBuffer)
-        .resize({ width: 800, withoutEnlargement: true })
-        .jpeg({ quality: 50 })
-        .toBuffer();
-      return compressed.toString("base64");
+      return await _captureResized(page);
     } finally {
       await removeBadges(page);
       await client.detach();
@@ -25,16 +19,62 @@ export async function captureWithBadges(
     // CDP not available (Firefox) — plain screenshot with DOM-injected badges
     await injectBadgesDom(page, elements);
     try {
-      const screenshotBuffer = await page.screenshot({ type: "jpeg", quality: 50 });
-      const compressed = await sharp(screenshotBuffer)
-        .resize({ width: 800, withoutEnlargement: true })
-        .jpeg({ quality: 50 })
-        .toBuffer();
-      return compressed.toString("base64");
+      return await _captureResized(page);
     } finally {
       await removeBadges(page);
     }
   }
+}
+
+/**
+ * Internal helper to capture a screenshot and resize it in-browser using Canvas.
+ * This avoids the need for the heavy 'sharp' library.
+ */
+async function _captureResized(page: Page): Promise<string> {
+  // 1. Take full-size JPEG screenshot with moderate quality
+  const screenshotBuffer = await page.screenshot({ type: "jpeg", quality: 70 });
+  const base64 = screenshotBuffer.toString("base64");
+
+  // 2. Use the browser to resize it via Canvas
+  const resizedBase64 = await page.evaluate(async (srcBase64) => {
+    return new Promise<string>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const targetWidth = 800;
+        const scale = targetWidth / img.width;
+        
+        // If the image is already small, return it as is
+        if (scale >= 1) {
+          resolve(srcBase64);
+          return;
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = targetWidth;
+        canvas.height = img.height * scale;
+        
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject("Could not get canvas context");
+          return;
+        }
+
+        // Use high-quality image scaling
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        
+        // Convert to low-quality JPEG for LLM ingestion
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
+        resolve(dataUrl.split(",")[1]);
+      };
+      img.onerror = () => reject("Image load error");
+      img.src = `data:image/jpeg;base64,${srcBase64}`;
+    });
+  }, base64);
+
+  return resizedBase64;
 }
 
 async function injectBadges(
@@ -162,10 +202,5 @@ async function removeBadges(page: Page): Promise<void> {
 }
 
 export async function captureScreenshot(page: Page): Promise<string> {
-  const screenshotBuffer = await page.screenshot({ type: "jpeg", quality: 50 });
-  const compressed = await sharp(screenshotBuffer)
-    .resize({ width: 800, withoutEnlargement: true })
-    .jpeg({ quality: 50 })
-    .toBuffer();
-  return compressed.toString("base64");
+  return await _captureResized(page);
 }

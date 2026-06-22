@@ -201,6 +201,12 @@ app.post("/lcp/dispatch", async (req, res) => {
         result = await page.context().cookies();
         break;
       }
+      case "clear_cookies": {
+        const page = await engine.getPage();
+        await page.context().clearCookies();
+        result = { ok: true };
+        break;
+      }
       case "wait_for_selector": {
         const page = await engine.getPage();
         try {
@@ -222,6 +228,61 @@ app.post("/lcp/dispatch", async (req, res) => {
         }
         break;
       }
+
+      // ── EchoBench selector-based operations ──────────────────────────────
+      case "click_selector": {
+        const page = await engine.getPage();
+        await page.locator(params.selector).first().click({ force: params.force ?? false });
+        result = { ok: true };
+        break;
+      }
+      case "is_visible": {
+        const page = await engine.getPage();
+        try {
+          result = { visible: await page.locator(params.selector).first().isVisible() };
+        } catch {
+          result = { visible: false };
+        }
+        break;
+      }
+      case "text_content": {
+        const page = await engine.getPage();
+        try {
+          result = { text: await page.locator(params.selector).first().textContent() ?? "" };
+        } catch {
+          result = { text: "" };
+        }
+        break;
+      }
+      case "fill": {
+        const page = await engine.getPage();
+        await page.locator(params.selector).first().fill(params.value ?? "");
+        result = { ok: true };
+        break;
+      }
+      case "html": {
+        const page = await engine.getPage();
+        result = { html: await page.content() };
+        break;
+      }
+      case "wait_for_timeout": {
+        await new Promise<void>(resolve => setTimeout(resolve, params.ms ?? 1000));
+        result = { ok: true };
+        break;
+      }
+      case "query_selector_all": {
+        const page = await engine.getPage();
+        const count = await page.locator(params.selector).count();
+        result = { count, found: count > 0 };
+        break;
+      }
+      case "set_input_files_selector": {
+        const page = await engine.getPage();
+        await page.locator(params.selector).first().setInputFiles(params.path);
+        result = { ok: true };
+        break;
+      }
+
       default:
         return res.status(404).json({ error: `Operation ${operation} not supported` });
     }
