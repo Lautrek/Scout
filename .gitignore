@@ -5,3 +5,4 @@ dist/
 *.db
 logs/
 .beads/
+shared_lib
