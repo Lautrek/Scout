@@ -53,17 +53,18 @@ export interface SelfHealResult {
 }
 
 /**
- * Run the heal command and capture its output. The default points at the
- * Lautrek studio_baseline.sh — projects can override via env or by passing
- * an explicit command.
+ * Run the heal command and capture its output. Requires SCOUT_SELF_HEAL_CMD
+ * to be set; if unset, heal is skipped and the caller receives a warning.
+ * Pass an explicit `opts.command` to override for testing.
  */
 export async function runSelfHeal(
   opts: SelfHealOptions = {}
 ): Promise<SelfHealResult> {
-  const command =
-    opts.command ??
-    process.env.SCOUT_SELF_HEAL_CMD ??
-    "/home/riga/Projects/Lautrek/scripts/studio_baseline.sh";
+  const command = opts.command ?? process.env.SCOUT_SELF_HEAL_CMD ?? null;
+  if (!command) {
+    console.error("Scout: self-heal skipped — set SCOUT_SELF_HEAL_CMD to enable");
+    return { ran: false, status: null, stdout: "", stderr: "", duration_ms: 0 };
+  }
   const args = opts.args ?? [];
   const timeoutMs = opts.timeout_ms ?? 30_000;
 

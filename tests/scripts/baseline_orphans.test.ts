@@ -3,8 +3,11 @@ import { spawnSync, spawn, ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const SCRIPT = "/home/riga/Projects/Lautrek/scripts/scout_baseline.sh";
+// Resolves to <repo-root>/scripts/scout_baseline.sh; override with env var for alternate layouts
+const SCRIPT = process.env.SCOUT_BASELINE_SCRIPT ??
+  fileURLToPath(new URL("../../../../scripts/scout_baseline.sh", import.meta.url));
 
 interface RunResult {
   stdout: string;

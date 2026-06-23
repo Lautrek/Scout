@@ -36,11 +36,14 @@ import { TOOLS, TOOL_BY_NAME, zodShapeToJsonSchema } from "./tool_registry.js";
 import { z } from "zod";
 
 const app = express();
-app.use(cors());
+// Restrict CORS to localhost origins only — LCP is a local-machine service
+app.use(cors({ origin: /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/ }));
 app.use(express.json({ limit: "10mb" }));
 
 const startTime = Date.now();
 const LCP_SECRET = process.env.SCOUT_LCP_SECRET ?? "";
+// Arbitrary JS eval in the live browser page — opt-in only
+const ALLOW_EVAL = process.env.SCOUT_ALLOW_EVAL === "true";
 
 // Auth middleware — only enforced when SCOUT_LCP_SECRET is set
 function requireSecret(req: express.Request, res: express.Response, next: express.NextFunction): void {
@@ -162,6 +165,9 @@ app.post("/lcp/dispatch", async (req, res) => {
         result = await switchTabTool(params.index);
         break;
       case "evaluate": {
+        if (!ALLOW_EVAL) {
+          return res.status(403).json({ error: "evaluate is disabled — set SCOUT_ALLOW_EVAL=true to enable" });
+        }
         const page = await engine.getPage();
         result = await page.evaluate(params.code);
         break;
@@ -326,7 +332,7 @@ function writePortFile(port: number): void {
 export function startLcpServer(port: number): Server {
   // port=0 → OS picks a free port (parallel cockpit, backward compat)
   // port>0 → fixed port; EADDRINUSE means another daemon is running — fail fast
-  const server = app.listen(port, () => {
+  const server = app.listen(port, "127.0.0.1", () => {
     const address = server.address();
     const actualPort =
       typeof address === "object" && address ? address.port : port;
